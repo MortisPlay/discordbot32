@@ -1496,6 +1496,7 @@ async def on_message_edit(before, after):
         ]
     )
 
+
 @bot.event
 async def on_audit_log_entry_create(entry):
     if not MOD_LOG_CHANNEL_ID: 
@@ -1511,10 +1512,12 @@ async def on_audit_log_entry_create(entry):
             case_id = await create_case(entry.target, entry.user, "Бан", entry.reason or "Не указана")
             embed = discord.Embed(
                 title="🔨 Бан",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Пользователь:** {entry.target}\n"
-                          f"**Причина:** {entry.reason or 'Не указана'}\n"
-                          f"**Кейс:** `{case_id}`",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Пользователь:** {entry.target}\n"
+                    f"**Причина:** {entry.reason or 'Не указана'}\n"
+                    f"**Кейс:** `{case_id}`"
+                ),
                 color=0xF04747,
                 timestamp=datetime.utcnow()
             )
@@ -1525,10 +1528,12 @@ async def on_audit_log_entry_create(entry):
             case_id = await create_case(entry.target, entry.user, "Кик", entry.reason or "Не указана")
             embed = discord.Embed(
                 title="👢 Кик",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Пользователь:** {entry.target}\n"
-                          f"**Причина:** {entry.reason or 'Не указана'}\n"
-                          f"**Кейс:** `{case_id}`",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Пользователь:** {entry.target}\n"
+                    f"**Причина:** {entry.reason or 'Не указана'}\n"
+                    f"**Кейс:** `{case_id}`"
+                ),
                 color=0xF04747,
                 timestamp=datetime.utcnow()
             )
@@ -1546,10 +1551,12 @@ async def on_audit_log_entry_create(entry):
                             case_id = await create_case(entry.target, entry.user, "Мут", entry.reason or "Не указана", str(after_timeout))
                             embed = discord.Embed(
                                 title="🔇 Мут",
-                                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                                          f"**Пользователь:** {entry.target.mention}\n"
-                                          f"**До:** {after_timeout}\n"
-                                          f"**Кейс:** `{case_id}`",
+                                description=(
+                                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                    f"**Пользователь:** {entry.target.mention}\n"
+                                    f"**До:** {after_timeout}\n"
+                                    f"**Кейс:** `{case_id}`"
+                                ),
                                 color=0xFAA61A,
                                 timestamp=datetime.utcnow()
                             )
@@ -1558,9 +1565,11 @@ async def on_audit_log_entry_create(entry):
                             case_id = await create_case(entry.target, entry.user, "Снятие мута", entry.reason or "Не указана")
                             embed = discord.Embed(
                                 title="🔊 Снят мут",
-                                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                                          f"**Пользователь:** {entry.target.mention}\n"
-                                          f"**Кейс:** `{case_id}`",
+                                description=(
+                                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                    f"**Пользователь:** {entry.target.mention}\n"
+                                    f"**Кейс:** `{case_id}`"
+                                ),
                                 color=0x57F287,
                                 timestamp=datetime.utcnow()
                             )
@@ -1573,22 +1582,27 @@ async def on_audit_log_entry_create(entry):
             count = getattr(entry.extra, 'count', 1)
             
             if count > 1:
-                title = "🗑 Массовое удаление сообщений"
-                desc = f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                       f"**Канал:** {channel_mention}\n"
-                       f"**Количество:** {count} сообщений"
+                embed = discord.Embed(
+                    title="🗑 Массовое удаление сообщений",
+                    description=(
+                        f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                        f"**Канал:** {channel_mention}\n"
+                        f"**Количество:** {count} сообщений"
+                    ),
+                    color=0xF04747,
+                    timestamp=datetime.utcnow()
+                )
             else:
-                title = "🗑 Сообщение удалено"
-                desc = f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                       f"**Канал:** {channel_mention}\n"
-                       f"**Автор:** {entry.target if entry.target else 'Неизвестно'}"
-            
-            embed = discord.Embed(
-                title=title,
-                description=desc,
-                color=0xF04747,
-                timestamp=datetime.utcnow()
-            )
+                embed = discord.Embed(
+                    title="🗑 Сообщение удалено",
+                    description=(
+                        f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                        f"**Канал:** {channel_mention}\n"
+                        f"**Автор:** {entry.target if entry.target else 'Неизвестно'}"
+                    ),
+                    color=0xF04747,
+                    timestamp=datetime.utcnow()
+                )
             await log_ch.send(embed=embed)
         
         # ✏️ Изменение сообщения
@@ -1606,9 +1620,11 @@ async def on_audit_log_entry_create(entry):
             
             embed = discord.Embed(
                 title="✏️ Сообщение изменено",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Автор сообщения'}\n"
-                          f"**Канал:** {channel_mention}\n"
-                          f"**Автор:** {entry.target if entry.target else 'Неизвестно'}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Автор сообщения'}\n"
+                    f"**Канал:** {channel_mention}\n"
+                    f"**Автор:** {entry.target if entry.target else 'Неизвестно'}"
+                ),
                 color=0xFAA61A,
                 timestamp=datetime.utcnow()
             )
@@ -1622,9 +1638,11 @@ async def on_audit_log_entry_create(entry):
         elif entry.action == discord.AuditLogAction.channel_create:
             embed = discord.Embed(
                 title="📢 Канал создан",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
-                          f"**Тип:** {entry.extra.type if hasattr(entry.extra, 'type') else 'Неизвестно'}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
+                    f"**Тип:** {entry.extra.type if hasattr(entry.extra, 'type') else 'Неизвестно'}"
+                ),
                 color=0x57F287,
                 timestamp=datetime.utcnow()
             )
@@ -1634,9 +1652,11 @@ async def on_audit_log_entry_create(entry):
         elif entry.action == discord.AuditLogAction.channel_delete:
             embed = discord.Embed(
                 title="🗑 Канал удалён",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Канал:** {entry.target}\n"
-                          f"**Тип:** {entry.extra.type if hasattr(entry.extra, 'type') else 'Неизвестно'}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Канал:** {entry.target}\n"
+                    f"**Тип:** {entry.extra.type if hasattr(entry.extra, 'type') else 'Неизвестно'}"
+                ),
                 color=0xF04747,
                 timestamp=datetime.utcnow()
             )
@@ -1655,9 +1675,11 @@ async def on_audit_log_entry_create(entry):
             if changes:
                 embed = discord.Embed(
                     title="✏️ Канал изменён",
-                    description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                              f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n\n"
-                              + "\n".join(changes),
+                    description=(
+                        f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                        f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n\n"
+                        f"{chr(10).join(changes)}"
+                    ),
                     color=0xFAA61A,
                     timestamp=datetime.utcnow()
                 )
@@ -1667,8 +1689,10 @@ async def on_audit_log_entry_create(entry):
         elif entry.action == discord.AuditLogAction.role_create:
             embed = discord.Embed(
                 title="🏷️ Роль создана",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Роль:** {entry.target}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Роль:** {entry.target}"
+                ),
                 color=0x57F287,
                 timestamp=datetime.utcnow()
             )
@@ -1678,8 +1702,10 @@ async def on_audit_log_entry_create(entry):
         elif entry.action == discord.AuditLogAction.role_delete:
             embed = discord.Embed(
                 title="🗑 Роль удалена",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Роль:** {entry.target}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Роль:** {entry.target}"
+                ),
                 color=0xF04747,
                 timestamp=datetime.utcnow()
             )
@@ -1703,8 +1729,10 @@ async def on_audit_log_entry_create(entry):
                 if fields:
                     embed = discord.Embed(
                         title="✏️ Роль изменена",
-                        description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                                  f"**Роль:** {entry.target}",
+                        description=(
+                            f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                            f"**Роль:** {entry.target}"
+                        ),
                         color=0xFAA61A,
                         timestamp=datetime.utcnow()
                     )
@@ -1713,45 +1741,41 @@ async def on_audit_log_entry_create(entry):
                     await log_ch.send(embed=embed)
         
         # 👤 Изменение участника (никнейм и т.д.)
-        elif entry.action == discord.AuditLogAction.member_update:
+        elif entry.action == discord.AuditLogAction.member_role_update:
             if entry.target and hasattr(entry.target, 'mention'):
-                changes = []
-                if entry.changes:
-                    for attr in ['nick', 'deaf', 'mute']:
-                        before = getattr(entry.changes, f'before_{attr}', None)
-                        after = getattr(entry.changes, f'after_{attr}', None)
-                        if before != after:
-                            changes.append(f"**{attr}:** {before} → {after}")
-                
-                if changes:
-                    embed = discord.Embed(
-                        title="👤 Участник изменён",
-                        description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                                  f"**Пользователь:** {entry.target.mention}\n\n"
-                                  + "\n".join(changes),
-                        color=0xFAA61A,
-                        timestamp=datetime.utcnow()
-                    )
-                    await log_ch.send(embed=embed)
+                embed = discord.Embed(
+                    title="👤 Роли участника изменены",
+                    description=(
+                        f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                        f"**Пользователь:** {entry.target.mention}"
+                    ),
+                    color=0xFAA61A,
+                    timestamp=datetime.utcnow()
+                )
+                await log_ch.send(embed=embed)
         
         # 📋 Изменение прав доступа (overwrites)
         elif entry.action == discord.AuditLogAction.overwrite_update:
             embed = discord.Embed(
                 title="📋 Права доступа изменены",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
-                          f"**Цель:** {entry.extra.target if hasattr(entry.extra, 'target') else 'Неизвестно'}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
+                    f"**Цель:** {entry.extra.target if hasattr(entry.extra, 'target') else 'Неизвестно'}"
+                ),
                 color=0xFAA61A,
                 timestamp=datetime.utcnow()
             )
             await log_ch.send(embed=embed)
         
-        # 📋 Создание эмодзи
+        # 😊 Создание эмодзи
         elif entry.action == discord.AuditLogAction.emoji_create:
             embed = discord.Embed(
                 title="😊 Эмодзи создан",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Эмодзи:** {entry.target}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Эмодзи:** {entry.target}"
+                ),
                 color=0x57F287,
                 timestamp=datetime.utcnow()
             )
@@ -1761,8 +1785,10 @@ async def on_audit_log_entry_create(entry):
         elif entry.action == discord.AuditLogAction.emoji_delete:
             embed = discord.Embed(
                 title="🗑 Эмодзи удалён",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Эмодзи:** {entry.target}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Эмодзи:** {entry.target}"
+                ),
                 color=0xF04747,
                 timestamp=datetime.utcnow()
             )
@@ -1772,63 +1798,10 @@ async def on_audit_log_entry_create(entry):
         elif entry.action == discord.AuditLogAction.emoji_update:
             embed = discord.Embed(
                 title="✏️ Эмодзи изменён",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Эмодзи:** {entry.target}",
-                color=0xFAA61A,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 📋 Создание стикера
-        elif entry.action == discord.AuditLogAction.sticker_create:
-            embed = discord.Embed(
-                title="📋 Стикер создан",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Стикер:** {entry.target}",
-                color=0x57F287,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 🗑 Удаление стикера
-        elif entry.action == discord.AuditLogAction.sticker_delete:
-            embed = discord.Embed(
-                title="🗑 Стикер удалён",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Стикер:** {entry.target}",
-                color=0xF04747,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 📋 Создание вебхука
-        elif entry.action == discord.AuditLogAction.webhook_create:
-            embed = discord.Embed(
-                title="🔗 Вебхук создан",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Название:** {entry.target}",
-                color=0x57F287,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 🗑 Удаление вебхука
-        elif entry.action == discord.AuditLogAction.webhook_delete:
-            embed = discord.Embed(
-                title="🔗 Вебхук удалён",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Название:** {entry.target}",
-                color=0xF04747,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 📋 Изменение вебхука
-        elif entry.action == discord.AuditLogAction.webhook_update:
-            embed = discord.Embed(
-                title="✏️ Вебхук изменён",
-                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                          f"**Название:** {entry.target}",
+                description=(
+                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                    f"**Эмодзи:** {entry.target}"
+                ),
                 color=0xFAA61A,
                 timestamp=datetime.utcnow()
             )
