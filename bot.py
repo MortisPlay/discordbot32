@@ -1498,33 +1498,345 @@ async def on_message_edit(before, after):
 
 @bot.event
 async def on_audit_log_entry_create(entry):
-    # Простая проверка - если нет канала, выходим
-    if not MOD_LOG_CHANNEL_ID:
+    if not MOD_LOG_CHANNEL_ID: 
         return
-    
+
     try:
-        # Получаем канал
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if not log_ch:
             return
-        
-        # Упрощенная обработка без сложных проверок
+
+        # 🔨 Бан
         if entry.action == discord.AuditLogAction.ban:
-            await log_ch.send(f"🔨 **Бан**\nМодератор: {entry.user}\nПользователь: {entry.target}\nПричина: {entry.reason or 'Не указана'}")
+            case_id = await create_case(entry.target, entry.user, "Бан", entry.reason or "Не указана")
+            embed = discord.Embed(
+                title="🔨 Бан",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Пользователь:** {entry.target}\n"
+                          f"**Причина:** {entry.reason or 'Не указана'}\n"
+                          f"**Кейс:** `{case_id}`",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
         
+        # 👢 Кик
         elif entry.action == discord.AuditLogAction.kick:
-            await log_ch.send(f"👢 **Кик**\nМодератор: {entry.user}\nПользователь: {entry.target}\nПричина: {entry.reason or 'Не указана'}")
+            case_id = await create_case(entry.target, entry.user, "Кик", entry.reason or "Не указана")
+            embed = discord.Embed(
+                title="👢 Кик",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Пользователь:** {entry.target}\n"
+                          f"**Причина:** {entry.reason or 'Не указана'}\n"
+                          f"**Кейс:** `{case_id}`",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
         
+        # 🔇 Мут/таймаут
         elif entry.action == discord.AuditLogAction.member_update:
-            # Проверяем мут
-            if hasattr(entry.changes, 'after_communication_disabled_until'):
-                if entry.changes.after_communication_disabled_until:
-                    await log_ch.send(f"🔇 **Мут**\nМодератор: {entry.user}\nПользователь: {entry.target}\nДо: {entry.changes.after_communication_disabled_until}")
-                else:
-                    await log_ch.send(f"🔊 **Снят мут**\nМодератор: {entry.user}\nПользователь: {entry.target}")
-    
+            if entry.target and hasattr(entry.target, 'mention'):
+                if entry.changes:
+                    before_timeout = getattr(entry.changes, 'before_timed_out_until', None)
+                    after_timeout = getattr(entry.changes, 'after_timed_out_until', None)
+                    
+                    if before_timeout != after_timeout:
+                        if after_timeout and not before_timeout:
+                            case_id = await create_case(entry.target, entry.user, "Мут", entry.reason or "Не указана", str(after_timeout))
+                            embed = discord.Embed(
+                                title="🔇 Мут",
+                                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                          f"**Пользователь:** {entry.target.mention}\n"
+                                          f"**До:** {after_timeout}\n"
+                                          f"**Кейс:** `{case_id}`",
+                                color=0xFAA61A,
+                                timestamp=datetime.utcnow()
+                            )
+                            await log_ch.send(embed=embed)
+                        elif before_timeout and not after_timeout:
+                            case_id = await create_case(entry.target, entry.user, "Снятие мута", entry.reason or "Не указана")
+                            embed = discord.Embed(
+                                title="🔊 Снят мут",
+                                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                          f"**Пользователь:** {entry.target.mention}\n"
+                                          f"**Кейс:** `{case_id}`",
+                                color=0x57F287,
+                                timestamp=datetime.utcnow()
+                            )
+                            await log_ch.send(embed=embed)
+        
+        # 📝 Удаление сообщения (одиночное или массовое)
+        elif entry.action == discord.AuditLogAction.message_delete:
+            channel = getattr(entry.extra, 'channel', None)
+            channel_mention = channel.mention if channel and hasattr(channel, 'mention') else 'Неизвестный канал'
+            count = getattr(entry.extra, 'count', 1)
+            
+            if count > 1:
+                title = "🗑 Массовое удаление сообщений"
+                desc = f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                       f"**Канал:** {channel_mention}\n"
+                       f"**Количество:** {count} сообщений"
+            else:
+                title = "🗑 Сообщение удалено"
+                desc = f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                       f"**Канал:** {channel_mention}\n"
+                       f"**Автор:** {entry.target if entry.target else 'Неизвестно'}"
+            
+            embed = discord.Embed(
+                title=title,
+                description=desc,
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # ✏️ Изменение сообщения
+        elif entry.action == discord.AuditLogAction.message_update:
+            channel = getattr(entry.extra, 'channel', None)
+            channel_mention = channel.mention if channel and hasattr(channel, 'mention') else 'Неизвестный канал'
+            
+            # Пытаемся получить старое и новое сообщение
+            old_content = "Не сохранилось"
+            new_content = "Не сохранилось"
+            
+            if entry.changes:
+                old_content = getattr(entry.changes, 'before_content', 'Не сохранилось')
+                new_content = getattr(entry.changes, 'after_content', 'Не сохранилось')
+            
+            embed = discord.Embed(
+                title="✏️ Сообщение изменено",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Автор сообщения'}\n"
+                          f"**Канал:** {channel_mention}\n"
+                          f"**Автор:** {entry.target if entry.target else 'Неизвестно'}",
+                color=0xFAA61A,
+                timestamp=datetime.utcnow()
+            )
+            
+            embed.add_field(name="Было", value=old_content[:900] + ("..." if len(old_content) > 900 else ""), inline=False)
+            embed.add_field(name="Стало", value=new_content[:900] + ("..." if len(new_content) > 900 else ""), inline=False)
+            
+            await log_ch.send(embed=embed)
+        
+        # 📢 Создание канала
+        elif entry.action == discord.AuditLogAction.channel_create:
+            embed = discord.Embed(
+                title="📢 Канал создан",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
+                          f"**Тип:** {entry.extra.type if hasattr(entry.extra, 'type') else 'Неизвестно'}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 🗑 Удаление канала
+        elif entry.action == discord.AuditLogAction.channel_delete:
+            embed = discord.Embed(
+                title="🗑 Канал удалён",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Канал:** {entry.target}\n"
+                          f"**Тип:** {entry.extra.type if hasattr(entry.extra, 'type') else 'Неизвестно'}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # ✏️ Изменение канала
+        elif entry.action == discord.AuditLogAction.channel_update:
+            changes = []
+            if entry.changes:
+                for attr in ['name', 'topic', 'nsfw', 'rate_limit_per_user', 'bitrate', 'user_limit']:
+                    before = getattr(entry.changes, f'before_{attr}', None)
+                    after = getattr(entry.changes, f'after_{attr}', None)
+                    if before != after:
+                        changes.append(f"**{attr}:** {before} → {after}")
+            
+            if changes:
+                embed = discord.Embed(
+                    title="✏️ Канал изменён",
+                    description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                              f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n\n"
+                              + "\n".join(changes),
+                    color=0xFAA61A,
+                    timestamp=datetime.utcnow()
+                )
+                await log_ch.send(embed=embed)
+        
+        # 🏷️ Создание роли
+        elif entry.action == discord.AuditLogAction.role_create:
+            embed = discord.Embed(
+                title="🏷️ Роль создана",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Роль:** {entry.target}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 🗑 Удаление роли
+        elif entry.action == discord.AuditLogAction.role_delete:
+            embed = discord.Embed(
+                title="🗑 Роль удалена",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Роль:** {entry.target}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # ✏️ Изменение роли
+        elif entry.action == discord.AuditLogAction.role_update:
+            if entry.changes:
+                fields = []
+                for attr in ['name', 'color', 'permissions', 'hoist', 'mentionable']:
+                    before = getattr(entry.changes, f'before_{attr}', None)
+                    after = getattr(entry.changes, f'after_{attr}', None)
+                    if before != after:
+                        field_name = attr.title()
+                        # Для permissions нужно специальное форматирование
+                        if attr == 'permissions':
+                            before = before.value if hasattr(before, 'value') else before
+                            after = after.value if hasattr(after, 'value') else after
+                        fields.append((field_name, f"Было: {before}\nСтало: {after}", False))
+                
+                if fields:
+                    embed = discord.Embed(
+                        title="✏️ Роль изменена",
+                        description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                  f"**Роль:** {entry.target}",
+                        color=0xFAA61A,
+                        timestamp=datetime.utcnow()
+                    )
+                    for name, value, inline in fields:
+                        embed.add_field(name=name, value=value, inline=inline)
+                    await log_ch.send(embed=embed)
+        
+        # 👤 Изменение участника (никнейм и т.д.)
+        elif entry.action == discord.AuditLogAction.member_update:
+            if entry.target and hasattr(entry.target, 'mention'):
+                changes = []
+                if entry.changes:
+                    for attr in ['nick', 'deaf', 'mute']:
+                        before = getattr(entry.changes, f'before_{attr}', None)
+                        after = getattr(entry.changes, f'after_{attr}', None)
+                        if before != after:
+                            changes.append(f"**{attr}:** {before} → {after}")
+                
+                if changes:
+                    embed = discord.Embed(
+                        title="👤 Участник изменён",
+                        description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                  f"**Пользователь:** {entry.target.mention}\n\n"
+                                  + "\n".join(changes),
+                        color=0xFAA61A,
+                        timestamp=datetime.utcnow()
+                    )
+                    await log_ch.send(embed=embed)
+        
+        # 📋 Изменение прав доступа (overwrites)
+        elif entry.action == discord.AuditLogAction.overwrite_update:
+            embed = discord.Embed(
+                title="📋 Права доступа изменены",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
+                          f"**Цель:** {entry.extra.target if hasattr(entry.extra, 'target') else 'Неизвестно'}",
+                color=0xFAA61A,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 📋 Создание эмодзи
+        elif entry.action == discord.AuditLogAction.emoji_create:
+            embed = discord.Embed(
+                title="😊 Эмодзи создан",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Эмодзи:** {entry.target}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 🗑 Удаление эмодзи
+        elif entry.action == discord.AuditLogAction.emoji_delete:
+            embed = discord.Embed(
+                title="🗑 Эмодзи удалён",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Эмодзи:** {entry.target}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # ✏️ Изменение эмодзи
+        elif entry.action == discord.AuditLogAction.emoji_update:
+            embed = discord.Embed(
+                title="✏️ Эмодзи изменён",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Эмодзи:** {entry.target}",
+                color=0xFAA61A,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 📋 Создание стикера
+        elif entry.action == discord.AuditLogAction.sticker_create:
+            embed = discord.Embed(
+                title="📋 Стикер создан",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Стикер:** {entry.target}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 🗑 Удаление стикера
+        elif entry.action == discord.AuditLogAction.sticker_delete:
+            embed = discord.Embed(
+                title="🗑 Стикер удалён",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Стикер:** {entry.target}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 📋 Создание вебхука
+        elif entry.action == discord.AuditLogAction.webhook_create:
+            embed = discord.Embed(
+                title="🔗 Вебхук создан",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Название:** {entry.target}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 🗑 Удаление вебхука
+        elif entry.action == discord.AuditLogAction.webhook_delete:
+            embed = discord.Embed(
+                title="🔗 Вебхук удалён",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Название:** {entry.target}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # 📋 Изменение вебхука
+        elif entry.action == discord.AuditLogAction.webhook_update:
+            embed = discord.Embed(
+                title="✏️ Вебхук изменён",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Название:** {entry.target}",
+                color=0xFAA61A,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+
     except Exception as e:
-        print(f"Ошибка аудита: {e}")
+        print(f"Ошибка в аудит логе: {e}")
+        print(f"Тип события: {entry.action}")
 # ───────────────────────────────────────────────
 #   КОМАНДЫ (ОСНОВНЫЕ)
 # ───────────────────────────────────────────────
@@ -1727,46 +2039,6 @@ async def stats(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="bothost_test", description="Тест для BotHost")
-@commands.has_permissions(administrator=True)
-async def bothost_test(ctx: commands.Context):
-    """Тестирует работу бота на BotHost"""
-    
-    # Проверяем переменные окружения
-    env_vars = {
-        "DISCORD_BOT_TOKEN": "✅" if os.getenv('DISCORD_BOT_TOKEN') else "❌",
-        "MOD_LOG_CHANNEL_ID": "✅" if os.getenv('MOD_LOG_CHANNEL_ID') else "❌",
-        "OWNER_ID": "✅" if os.getenv('OWNER_ID') else "❌",
-    }
-    
-    env_status = "\n".join([f"{k}: {v}" for k, v in env_vars.items()])
-    
-    # Проверяем канал логов
-    log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
-    log_status = "✅ Найден" if log_ch else "❌ Не найден"
-    
-    # Проверяем права
-    permissions = ctx.guild.me.guild_permissions
-    perms_status = {
-        "view_audit_log": "✅" if permissions.view_audit_log else "❌",
-        "send_messages": "✅" if permissions.send_messages else "❌",
-        "embed_links": "✅" if permissions.embed_links else "❌",
-    }
-    
-    perms_text = "\n".join([f"{k}: {v}" for k, v in perms_status.items()])
-    
-    embed = discord.Embed(
-        title="🤖 BotHost Диагностика",
-        color=0x57F287,
-        timestamp=datetime.utcnow()
-    )
-    
-    embed.add_field(name="Переменные окружения", value=env_status, inline=False)
-    embed.add_field(name="Канал логов", value=log_status, inline=False)
-    embed.add_field(name="Права бота", value=perms_text, inline=False)
-    embed.add_field(name="Сервер", value=f"ID: {ctx.guild.id}\nНазвание: {ctx.guild.name}", inline=False)
-    
-    await ctx.send(embed=embed, ephemeral=True)
     
 @bot.hybrid_command(name="say", description="Написать от лица бота (поддержка embed + ответ на сообщение)")
 @app_commands.describe(
