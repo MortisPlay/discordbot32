@@ -27,18 +27,18 @@ if not TOKEN:
     exit(1)
 
 # ID владельца бота (можно оставить как есть или тоже вынести в переменные)
-OWNER_ID = int(os.getenv('OWNER_ID')
+OWNER_ID = int(os.getenv('OWNER_ID', '765476979792150549'))
 
 # ID сервера с полным доступом
-FULL_ACCESS_GUILD_ID = int(os.getenv('FULL_ACCESS_GUILD_ID')
+FULL_ACCESS_GUILD_ID = int(os.getenv('FULL_ACCESS_GUILD_ID', '1474623510268739790'))
 
 # ID каналов
-MOD_LOG_CHANNEL_ID = int(os.getenv('MOD_LOG_CHANNEL_ID')
-TICKET_ARCHIVE_CHANNEL_ID = int(os.getenv('TICKET_ARCHIVE_CHANNEL_ID')
+MOD_LOG_CHANNEL_ID = int(os.getenv('MOD_LOG_CHANNEL_ID', '1475291899672657940'))
+TICKET_ARCHIVE_CHANNEL_ID = int(os.getenv('TICKET_ARCHIVE_CHANNEL_ID', '1475338423513649347'))
 
 # ID категории тикетов и роли поддержки
-TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID')
-SUPPORT_ROLE_ID = int(os.getenv('SUPPORT_ROLE_ID')
+TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', '1475334525344157807'))
+SUPPORT_ROLE_ID = int(os.getenv('SUPPORT_ROLE_ID', '1475331888163066029'))
 
 # ───────────────────────────────────────────────
 #   ОСТАЛЬНЫЕ НАСТРОЙКИ
@@ -998,7 +998,7 @@ class HelpView(View):
                         ("/unmute", "Снять мут"),
                         ("/temprole", "Временная роль"),
                         ("/case", "Информация о кейсе"),
-                        ("/faq add", "Добавить вопрос в FAQ")
+                        ("/faqadd", "Добавить вопрос в FAQ")
                     ]
                 },
                 {
@@ -1568,7 +1568,7 @@ async def on_audit_log_entry_create(entry):
                             )
                             await log_ch.send(embed=embed)
         
-        # Остальные события...
+        # Создание канала
         elif entry.action == discord.AuditLogAction.channel_create:
             embed = discord.Embed(
                 title="📢 Новый канал",
@@ -1579,6 +1579,7 @@ async def on_audit_log_entry_create(entry):
             )
             await log_ch.send(embed=embed)
         
+        # Удаление канала
         elif entry.action == discord.AuditLogAction.channel_delete:
             embed = discord.Embed(
                 title="🗑 Канал удалён",
@@ -1589,6 +1590,7 @@ async def on_audit_log_entry_create(entry):
             )
             await log_ch.send(embed=embed)
         
+        # Создание роли
         elif entry.action == discord.AuditLogAction.role_create:
             embed = discord.Embed(
                 title="🏷️ Роль создана",
@@ -1599,6 +1601,7 @@ async def on_audit_log_entry_create(entry):
             )
             await log_ch.send(embed=embed)
         
+        # Удаление роли
         elif entry.action == discord.AuditLogAction.role_delete:
             embed = discord.Embed(
                 title="🏷️ Роль удалена",
