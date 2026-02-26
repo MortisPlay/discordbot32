@@ -27,18 +27,18 @@ if not TOKEN:
     exit(1)
 
 # ID владельца бота (можно оставить как есть или тоже вынести в переменные)
-OWNER_ID = int(os.getenv('OWNER_ID', '765476979792150549'))
+OWNER_ID = int(os.getenv('OWNER_ID')
 
 # ID сервера с полным доступом
-FULL_ACCESS_GUILD_ID = int(os.getenv('FULL_ACCESS_GUILD_ID', '1474623510268739790'))
+FULL_ACCESS_GUILD_ID = int(os.getenv('FULL_ACCESS_GUILD_ID')
 
 # ID каналов
-MOD_LOG_CHANNEL_ID = int(os.getenv('MOD_LOG_CHANNEL_ID', '1475291899672657940'))
-TICKET_ARCHIVE_CHANNEL_ID = int(os.getenv('TICKET_ARCHIVE_CHANNEL_ID', '1475338423513649347'))
+MOD_LOG_CHANNEL_ID = int(os.getenv('MOD_LOG_CHANNEL_ID')
+TICKET_ARCHIVE_CHANNEL_ID = int(os.getenv('TICKET_ARCHIVE_CHANNEL_ID')
 
 # ID категории тикетов и роли поддержки
-TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', '1475334525344157807'))
-SUPPORT_ROLE_ID = int(os.getenv('SUPPORT_ROLE_ID', '1475331888163066029'))
+TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID')
+SUPPORT_ROLE_ID = int(os.getenv('SUPPORT_ROLE_ID')
 
 # ───────────────────────────────────────────────
 #   ОСТАЛЬНЫЕ НАСТРОЙКИ
