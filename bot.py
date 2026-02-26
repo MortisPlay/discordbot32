@@ -1502,110 +1502,115 @@ async def on_audit_log_entry_create(entry):
     if not MOD_LOG_CHANNEL_ID: 
         return
 
-    # Бан
-    if entry.action == discord.AuditLogAction.ban:
-        case_id = await create_case(entry.target, entry.user, "Бан", entry.reason or "Не указана")
-        await send_mod_log(
-            "🔨 Бан", 
-            f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-            f"**Пользователь:** {entry.target}\n"
-            f"**Причина:** {entry.reason or 'Не указана'}\n"
-            f"**Кейс:** `{case_id}`", 
-            0xF04747
-        )
-    
-    # Кик
-    elif entry.action == discord.AuditLogAction.kick:
-        case_id = await create_case(entry.target, entry.user, "Кик", entry.reason or "Не указана")
-        await send_mod_log(
-            "👢 Кик", 
-            f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-            f"**Пользователь:** {entry.target}\n"
-            f"**Причина:** {entry.reason or 'Не указана'}\n"
-            f"**Кейс:** `{case_id}`", 
-            0xF04747
-        )
-    
-    # Мут/таймаут
-    elif entry.action == discord.AuditLogAction.member_update:
-        if entry.target and hasattr(entry.target, 'mention'):
-            changes = []
-            if entry.changes:
-                # Проверяем изменения в таймауте
-                before_timeout = getattr(entry.changes, 'before_timed_out_until', None)
-                after_timeout = getattr(entry.changes, 'after_timed_out_until', None)
-                
-                if before_timeout != after_timeout:
-                    if after_timeout and not before_timeout:
-                        case_id = await create_case(entry.target, entry.user, "Мут", entry.reason or "Не указана", str(after_timeout))
-                        changes.append((f"🔇 Мут [`{case_id}`]", f"До: {after_timeout}", False))
-                    elif before_timeout and not after_timeout:
-                        case_id = await create_case(entry.target, entry.user, "Снятие мута", entry.reason or "Не указана")
-                        changes.append((f"🔊 Снят мут [`{case_id}`]", "Мут снят", False))
-            
-            if changes:
-                await send_mod_log(
-                    "👤 Изменение участника",
-                    f"**Пользователь:** {entry.target.mention}",
-                    0xFAA61A,
-                    changes
-                )
-    
-    # Создание канала
-    elif entry.action == discord.AuditLogAction.channel_create:
-        await send_mod_log(
-            "📢 Новый канал", 
-            f"**Создал:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-            f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}", 
-            0x57F287
-        )
-    
-    # Удаление канала
-    elif entry.action == discord.AuditLogAction.channel_delete:
-        await send_mod_log(
-            "🗑 Канал удалён", 
-            f"**Удалил:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-            f"**Канал:** {entry.target}", 
-            0xF04747
-        )
-    
-    # Создание роли
-    elif entry.action == discord.AuditLogAction.role_create:
-        await send_mod_log(
-            "🏷️ Роль создана", 
-            f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-            f"**Роль:** {entry.target}", 
-            0x57F287
-        )
-    
-    # Удаление роли
-    elif entry.action == discord.AuditLogAction.role_delete:
-        await send_mod_log(
-            "🏷️ Роль удалена", 
-            f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-            f"**Роль:** {entry.target}", 
-            0xF04747
-        )
-    
-    # Изменение роли
-    elif entry.action == discord.AuditLogAction.role_update:
-        if entry.changes:
-            fields = []
-            for attr in ['name', 'color', 'permissions', 'hoist', 'mentionable']:
-                before = getattr(entry.changes, f'before_{attr}', None)
-                after = getattr(entry.changes, f'after_{attr}', None)
-                if before != after:
-                    field_name = attr.title()
-                    fields.append((field_name, f"Было: {before}\nСтало: {after}", False))
-            
-            if fields:
-                await send_mod_log(
-                    "🏷️ Роль изменена",
-                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                    f"**Роль:** {entry.target}",
-                    0xFAA61A,
-                    fields
-                )
+    try:
+        # Проверяем, что канал существует
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+
+        # Бан
+        if entry.action == discord.AuditLogAction.ban:
+            case_id = await create_case(entry.target, entry.user, "Бан", entry.reason or "Не указана")
+            embed = discord.Embed(
+                title="🔨 Бан",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Пользователь:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
+                          f"**Причина:** {entry.reason or 'Не указана'}\n"
+                          f"**Кейс:** `{case_id}`",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # Кик
+        elif entry.action == discord.AuditLogAction.kick:
+            case_id = await create_case(entry.target, entry.user, "Кик", entry.reason or "Не указана")
+            embed = discord.Embed(
+                title="👢 Кик",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Пользователь:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
+                          f"**Причина:** {entry.reason or 'Не указана'}\n"
+                          f"**Кейс:** `{case_id}`",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        # Мут/таймаут
+        elif entry.action == discord.AuditLogAction.member_update:
+            if entry.target and hasattr(entry.target, 'mention'):
+                if entry.changes:
+                    before_timeout = getattr(entry.changes, 'before_timed_out_until', None)
+                    after_timeout = getattr(entry.changes, 'after_timed_out_until', None)
+                    
+                    if before_timeout != after_timeout:
+                        if after_timeout and not before_timeout:
+                            case_id = await create_case(entry.target, entry.user, "Мут", entry.reason or "Не указана", str(after_timeout))
+                            embed = discord.Embed(
+                                title="🔇 Мут",
+                                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                          f"**Пользователь:** {entry.target.mention}\n"
+                                          f"**До:** {after_timeout}\n"
+                                          f"**Кейс:** `{case_id}`",
+                                color=0xFAA61A,
+                                timestamp=datetime.utcnow()
+                            )
+                            await log_ch.send(embed=embed)
+                        elif before_timeout and not after_timeout:
+                            case_id = await create_case(entry.target, entry.user, "Снятие мута", entry.reason or "Не указана")
+                            embed = discord.Embed(
+                                title="🔊 Снят мут",
+                                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                                          f"**Пользователь:** {entry.target.mention}\n"
+                                          f"**Кейс:** `{case_id}`",
+                                color=0x57F287,
+                                timestamp=datetime.utcnow()
+                            )
+                            await log_ch.send(embed=embed)
+        
+        # Остальные события...
+        elif entry.action == discord.AuditLogAction.channel_create:
+            embed = discord.Embed(
+                title="📢 Новый канал",
+                description=f"**Создал:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        elif entry.action == discord.AuditLogAction.channel_delete:
+            embed = discord.Embed(
+                title="🗑 Канал удалён",
+                description=f"**Удалил:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Канал:** {entry.target}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        elif entry.action == discord.AuditLogAction.role_create:
+            embed = discord.Embed(
+                title="🏷️ Роль создана",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Роль:** {entry.target}",
+                color=0x57F287,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+        
+        elif entry.action == discord.AuditLogAction.role_delete:
+            embed = discord.Embed(
+                title="🏷️ Роль удалена",
+                description=f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
+                          f"**Роль:** {entry.target}",
+                color=0xF04747,
+                timestamp=datetime.utcnow()
+            )
+            await log_ch.send(embed=embed)
+
+    except Exception as e:
+        print(f"Ошибка в аудит логе: {e}")
 
 # ───────────────────────────────────────────────
 #   КОМАНДЫ (ОСНОВНЫЕ)
