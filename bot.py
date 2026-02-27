@@ -1961,6 +1961,36 @@ async def stats(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
+@bot.hybrid_command(name="test_log", description="Тест канала логов")
+async def test_log(ctx: commands.Context):
+    """Проверяет работу канала логов"""
+    try:
+        # Проверяем переменную окружения
+        env_channel = os.getenv('MOD_LOG_CHANNEL_ID')
+        
+        # Проверяем канал через бота
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        
+        embed = discord.Embed(title="📋 Диагностика канала логов", color=0x57F287)
+        embed.add_field(name="Переменная окружения", value=f"`{env_channel or 'Не задана'}`", inline=False)
+        embed.add_field(name="Канал найден?", value="✅ Да" if log_ch else "❌ Нет", inline=False)
+        
+        if log_ch:
+            embed.add_field(name="Название канала", value=log_ch.name, inline=False)
+            embed.add_field(name="ID канала", value=log_ch.id, inline=False)
+            
+            # Пробуем отправить тестовое сообщение
+            try:
+                await log_ch.send("✅ Тестовое сообщение от бота")
+                embed.add_field(name="Отправка сообщения", value="✅ Успешно", inline=False)
+            except Exception as e:
+                embed.add_field(name="Ошибка отправки", value=f"❌ {str(e)}", inline=False)
+        
+        await ctx.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await ctx.send(f"❌ Ошибка: {e}", ephemeral=True)
+
     
 @bot.hybrid_command(name="say", description="Написать от лица бота (поддержка embed + ответ на сообщение)")
 @app_commands.describe(
