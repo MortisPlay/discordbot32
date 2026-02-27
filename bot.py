@@ -1098,228 +1098,217 @@ async def on_ready():
     print("Бот полностью готов к работе")
 
 # ───────────────────────────────────────────────
-#   СОБЫТИЯ ЛОГИРОВАНИЯ
+#   ПРОСТЕЙШАЯ СИСТЕМА ЛОГОВ
 # ───────────────────────────────────────────────
+
+async def log_to_channel(embed: discord.Embed):
+    """Отправляет лог в канал (простой и надежный способ)"""
+    if not MOD_LOG_CHANNEL_ID or MOD_LOG_CHANNEL_ID == 0:
+        print("❌ MOD_LOG_CHANNEL_ID не задан!")
+        return
+    
+    channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
+    if not channel:
+        print(f"❌ Канал {MOD_LOG_CHANNEL_ID} не найден!")
+        return
+    
+    try:
+        await channel.send(embed=embed)
+        print(f"✅ Лог отправлен в канал {channel.name}")
+    except Exception as e:
+        print(f"❌ Ошибка отправки лога: {e}")
 
 @bot.event
 async def on_message_delete(message):
     """Логирование удаления сообщений"""
     if message.author.bot:
         return
+    
+    print(f"🔍 Событие: удаление сообщения от {message.author}")
+    
     embed = discord.Embed(
         title="🗑 Сообщение удалено",
         color=0xF04747,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Автор", value=message.author.mention, inline=True)
-    embed.add_field(name="Канал", value=message.channel.mention, inline=True)
-    embed.add_field(name="ID автора", value=f"`{message.author.id}`", inline=True)
-    if message.content:
-        embed.add_field(name="Содержимое", value=message.content[:900] + ("..." if len(message.content) > 900 else ""), inline=False)
-    else:
-        embed.add_field(name="Содержимое", value="*Пустое сообщение или медиа*", inline=False)
-    await send_log_embed(embed)
+    embed.add_field(name="Автор", value=f"{message.author} (`{message.author.id}`)", inline=False)
+    embed.add_field(name="Канал", value=message.channel.mention, inline=False)
+    embed.add_field(name="Содержимое", value=message.content[:500] or "*Пусто*", inline=False)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_message_edit(before, after):
     """Логирование изменения сообщений"""
     if before.author.bot or before.content == after.content:
         return
+    
+    print(f"🔍 Событие: изменение сообщения от {before.author}")
+    
     embed = discord.Embed(
         title="✏️ Сообщение изменено",
         color=0xFAA61A,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Автор", value=before.author.mention, inline=True)
-    embed.add_field(name="Канал", value=before.channel.mention, inline=True)
-    embed.add_field(name="ID автора", value=f"`{before.author.id}`", inline=True)
-    embed.add_field(name="Было", value=before.content[:500] + ("..." if len(before.content) > 500 else "") or "*Пусто*", inline=False)
-    embed.add_field(name="Стало", value=after.content[:500] + ("..." if len(after.content) > 500 else "") or "*Пусто*", inline=False)
-    await send_log_embed(embed)
+    embed.add_field(name="Автор", value=f"{before.author} (`{before.author.id}`)", inline=False)
+    embed.add_field(name="Канал", value=before.channel.mention, inline=False)
+    embed.add_field(name="Было", value=before.content[:500] or "*Пусто*", inline=False)
+    embed.add_field(name="Стало", value=after.content[:500] or "*Пусто*", inline=False)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_member_update(before, after):
     """Логирование изменений участников"""
-    # Никнейм
+    # Проверка ника
     if before.nick != after.nick:
+        print(f"🔍 Событие: изменение ника {before} -> {after.nick}")
+        
         embed = discord.Embed(
             title="👤 Никнейм изменён",
             color=0xFAA61A,
             timestamp=datetime.utcnow()
         )
-        embed.add_field(name="Пользователь", value=after.mention, inline=True)
-        embed.add_field(name="ID", value=f"`{after.id}`", inline=True)
+        embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
         embed.add_field(name="Было", value=before.nick or "*Не указан*", inline=True)
         embed.add_field(name="Стало", value=after.nick or "*Не указан*", inline=True)
-        await send_log_embed(embed)
-    # Роли
+        
+        await log_to_channel(embed)
+    
+    # Проверка ролей
     if before.roles != after.roles:
-        added_roles = [role for role in after.roles if role not in before.roles and role.name != "@everyone"]
-        removed_roles = [role for role in before.roles if role not in after.roles and role.name != "@everyone"]
-        if added_roles or removed_roles:
+        print(f"🔍 Событие: изменение ролей {before}")
+        
+        added = [r.mention for r in after.roles if r not in before.roles and r.name != "@everyone"]
+        removed = [r.mention for r in before.roles if r not in after.roles and r.name != "@everyone"]
+        
+        if added or removed:
             embed = discord.Embed(
                 title="👤 Роли изменены",
                 color=0xFAA61A,
                 timestamp=datetime.utcnow()
             )
-            embed.add_field(name="Пользователь", value=after.mention, inline=True)
-            embed.add_field(name="ID", value=f"`{after.id}`", inline=True)
-            if added_roles:
-                embed.add_field(name="✅ Добавлены", value=", ".join([r.mention for r in added_roles]), inline=False)
-            if removed_roles:
-                embed.add_field(name="❌ Удалены", value=", ".join([r.mention for r in removed_roles]), inline=False)
-            await send_log_embed(embed)
-    # Мут/таймаут
+            embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
+            if added:
+                embed.add_field(name="✅ Добавлены", value=", ".join(added), inline=False)
+            if removed:
+                embed.add_field(name="❌ Удалены", value=", ".join(removed), inline=False)
+            
+            await log_to_channel(embed)
+    
+    # Проверка мута
     if before.timed_out_until != after.timed_out_until:
+        print(f"🔍 Событие: изменение мута {before}")
+        
         if after.timed_out_until:
             duration = after.timed_out_until - datetime.utcnow()
             hours = duration.seconds // 3600
             minutes = (duration.seconds % 3600) // 60
-            duration_text = f"{hours}ч {minutes}м"
-            case_id = await create_case(after, bot.user, "Мут", "Автоматически", duration_text)
+            
             embed = discord.Embed(
                 title="🔇 Пользователь замучен",
                 color=0xF04747,
                 timestamp=datetime.utcnow()
             )
-            embed.add_field(name="Пользователь", value=after.mention, inline=True)
-            embed.add_field(name="ID", value=f"`{after.id}`", inline=True)
-            embed.add_field(name="Длительность", value=duration_text, inline=True)
+            embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
+            embed.add_field(name="Длительность", value=f"{hours}ч {minutes}м", inline=True)
             embed.add_field(name="До", value=f"<t:{int(after.timed_out_until.timestamp())}:R>", inline=True)
-            embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
-            await send_log_embed(embed)
         else:
-            case_id = await create_case(after, bot.user, "Снятие мута", "Автоматически")
             embed = discord.Embed(
                 title="🔊 Мут снят",
                 color=0x57F287,
                 timestamp=datetime.utcnow()
             )
-            embed.add_field(name="Пользователь", value=after.mention, inline=True)
-            embed.add_field(name="ID", value=f"`{after.id}`", inline=True)
-            embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
-            await send_log_embed(embed)
+            embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
+        
+        await log_to_channel(embed)
 
 @bot.event
 async def on_member_ban(guild, user):
     """Логирование бана"""
-    reason = "Не указана"
-    moderator = "Неизвестно"
-    try:
-        async for entry in guild.audit_logs(action=discord.AuditLogAction.ban, limit=1):
-            if entry.target.id == user.id:
-                reason = entry.reason or "Не указана"
-                moderator = entry.user.mention if entry.user else "Неизвестно"
-                break
-    except:
-        pass
-    case_id = await create_case(user, bot.user, "Бан", reason)
+    print(f"🔍 Событие: бан {user}")
+    
     embed = discord.Embed(
-        title="🔨 Бан",
+        title="🔨 Пользователь забанен",
         color=0xF04747,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Пользователь", value=f"{user.mention if hasattr(user, 'mention') else user}", inline=True)
-    embed.add_field(name="ID", value=f"`{user.id}`", inline=True)
-    embed.add_field(name="Модератор", value=moderator, inline=True)
-    embed.add_field(name="Причина", value=reason, inline=False)
-    embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
-    await send_log_embed(embed)
+    embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_member_unban(guild, user):
     """Логирование разбана"""
+    print(f"🔍 Событие: разбан {user}")
+    
     embed = discord.Embed(
-        title="🔓 Разбан",
+        title="🔓 Пользователь разбанен",
         color=0x57F287,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Пользователь", value=f"{user.mention if hasattr(user, 'mention') else user}", inline=True)
-    embed.add_field(name="ID", value=f"`{user.id}`", inline=True)
-    await send_log_embed(embed)
+    embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_member_join(member):
     """Логирование входа"""
-    # Системный канал
-    if member.guild.system_channel:
-        embed = discord.Embed(
-            title="🎉 Новый участник!",
-            description=f"**{member.mention}**, добро пожаловать на сервер **{member.guild.name}**!",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        account_age = datetime.utcnow() - member.created_at
-        days = account_age.days
-        embed.add_field(name="📅 Возраст аккаунта", value=f"**{days}** дней", inline=True)
-        embed.add_field(name="👥 Участников теперь", value=f"**{member.guild.member_count}**", inline=True)
-        if days < NEW_ACCOUNT_DAYS:
-            embed.add_field(name="⚠️ Внимание", value="Аккаунт создан недавно!", inline=False)
-        embed.set_footer(text=f"ID: {member.id}")
-        await member.guild.system_channel.send(embed=embed)
-    # Лог через вебхук
-    account_age = datetime.utcnow() - member.created_at
-    days = account_age.days
+    print(f"🔍 Событие: вход {member}")
+    
     embed = discord.Embed(
         title="📥 Участник зашёл",
         color=0x57F287,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Пользователь", value=member.mention, inline=True)
-    embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
-    embed.add_field(name="Возраст аккаунта", value=f"{days} дней", inline=True)
-    await send_log_embed(embed)
+    embed.add_field(name="Пользователь", value=f"{member.mention} (`{member.id}`)", inline=False)
+    
+    await log_to_channel(embed)
+    
+    # Приветствие в системный канал
+    if member.guild.system_channel:
+        welcome = discord.Embed(
+            title="🎉 Новый участник!",
+            description=f"Добро пожаловать, {member.mention}!",
+            color=0x57F287
+        )
+        await member.guild.system_channel.send(embed=welcome)
 
 @bot.event
 async def on_member_remove(member):
     """Логирование выхода"""
-    # Системный канал
-    if member.guild.system_channel:
-        embed = discord.Embed(
-            title="👋 Пользователь покинул нас",
-            description=f"**{member}** покинул сервер...",
-            color=0xF04747,
-            timestamp=datetime.utcnow()
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        if member.joined_at:
-            time_on_server = datetime.utcnow() - member.joined_at
-            days = time_on_server.days
-            embed.add_field(name="⏱️ Провел на сервере", value=f"**{days}** дней", inline=True)
-        embed.add_field(name="👥 Осталось участников", value=f"**{member.guild.member_count}**", inline=True)
-        embed.set_footer(text=f"ID: {member.id}")
-        await member.guild.system_channel.send(embed=embed)
-    # Лог через вебхук
+    print(f"🔍 Событие: выход {member}")
+    
     embed = discord.Embed(
         title="📤 Участник вышел",
         color=0xF04747,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Пользователь", value=str(member), inline=True)
-    embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
-    if member.joined_at:
-        time_on_server = datetime.utcnow() - member.joined_at
-        days = time_on_server.days
-        embed.add_field(name="Провел на сервере", value=f"{days} дней", inline=True)
-    await send_log_embed(embed)
+    embed.add_field(name="Пользователь", value=f"{member} (`{member.id}`)", inline=False)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_guild_channel_create(channel):
     """Логирование создания канала"""
+    print(f"🔍 Событие: создание канала {channel.name}")
+    
     embed = discord.Embed(
         title="📢 Канал создан",
         color=0x57F287,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Канал", value=channel.mention, inline=True)
+    embed.add_field(name="Канал", value=channel.mention, inline=False)
     embed.add_field(name="Название", value=channel.name, inline=True)
     embed.add_field(name="Тип", value=str(channel.type), inline=True)
-    await send_log_embed(embed)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_guild_channel_delete(channel):
     """Логирование удаления канала"""
+    print(f"🔍 Событие: удаление канала {channel.name}")
+    
     embed = discord.Embed(
         title="🗑 Канал удалён",
         color=0xF04747,
@@ -1328,56 +1317,76 @@ async def on_guild_channel_delete(channel):
     embed.add_field(name="Название", value=channel.name, inline=True)
     embed.add_field(name="Тип", value=str(channel.type), inline=True)
     embed.add_field(name="ID", value=f"`{channel.id}`", inline=True)
-    await send_log_embed(embed)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_guild_channel_update(before, after):
     """Логирование изменения канала"""
     if before.name == after.name:
         return
+    
+    print(f"🔍 Событие: изменение канала {before.name} -> {after.name}")
+    
     embed = discord.Embed(
         title="✏️ Канал изменён",
         color=0xFAA61A,
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Канал", value=after.mention, inline=True)
+    embed.add_field(name="Канал", value=after.mention, inline=False)
     embed.add_field(name="Было", value=before.name, inline=True)
     embed.add_field(name="Стало", value=after.name, inline=True)
-    await send_log_embed(embed)
+    
+    await log_to_channel(embed)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
     """Логирование голосовой активности"""
     if member.bot:
         return
+    
+    # Зашёл в голосовой канал
     if before.channel is None and after.channel is not None:
+        print(f"🔍 Событие: {member} зашёл в {after.channel.name}")
+        
         embed = discord.Embed(
             title="🔊 Зашёл в голосовой канал",
             color=0x57F287,
             timestamp=datetime.utcnow()
         )
-        embed.add_field(name="Пользователь", value=member.mention, inline=True)
-        embed.add_field(name="Канал", value=after.channel.mention, inline=True)
-        await send_log_embed(embed)
+        embed.add_field(name="Пользователь", value=member.mention, inline=False)
+        embed.add_field(name="Канал", value=after.channel.mention, inline=False)
+        
+        await log_to_channel(embed)
+    
+    # Вышел из голосового канала
     elif before.channel is not None and after.channel is None:
+        print(f"🔍 Событие: {member} вышел из {before.channel.name}")
+        
         embed = discord.Embed(
             title="🔇 Вышел из голосового канала",
             color=0xF04747,
             timestamp=datetime.utcnow()
         )
-        embed.add_field(name="Пользователь", value=member.mention, inline=True)
-        embed.add_field(name="Канал", value=before.channel.mention, inline=True)
-        await send_log_embed(embed)
-    elif before.channel != after.channel and before.channel is not None and after.channel is not None:
+        embed.add_field(name="Пользователь", value=member.mention, inline=False)
+        embed.add_field(name="Канал", value=before.channel.mention, inline=False)
+        
+        await log_to_channel(embed)
+    
+    # Переключился между каналами
+    elif before.channel != after.channel:
+        print(f"🔍 Событие: {member} переключился {before.channel.name} -> {after.channel.name}")
+        
         embed = discord.Embed(
             title="🔄 Переключил голосовой канал",
             color=0xFAA61A,
             timestamp=datetime.utcnow()
         )
-        embed.add_field(name="Пользователь", value=member.mention, inline=True)
+        embed.add_field(name="Пользователь", value=member.mention, inline=False)
         embed.add_field(name="Из", value=before.channel.mention, inline=True)
         embed.add_field(name="В", value=after.channel.mention, inline=True)
-        await send_log_embed(embed)
+        
+        await log_to_channel(embed)
 
 # ───────────────────────────────────────────────
 #   КОМАНДЫ
