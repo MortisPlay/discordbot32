@@ -1499,14 +1499,18 @@ async def on_message_edit(before, after):
 
 @bot.event
 async def on_audit_log_entry_create(entry):
-    if not MOD_LOG_CHANNEL_ID: 
+    print(f"🔍 ПОЛУЧЕНО СОБЫТИЕ: {entry.action}")
+    
+    if not MOD_LOG_CHANNEL_ID:
+        print("❌ MOD_LOG_CHANNEL_ID не задан!")
+        return
+    
+    log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+    if not log_ch:
+        print(f"❌ Канал {MOD_LOG_CHANNEL_ID} не найден!")
         return
 
     try:
-        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
-        if not log_ch:
-            return
-
         # 🔨 Бан
         if entry.action == discord.AuditLogAction.ban:
             case_id = await create_case(entry.target, entry.user, "Бан", entry.reason or "Не указана")
@@ -1575,7 +1579,7 @@ async def on_audit_log_entry_create(entry):
                             )
                             await log_ch.send(embed=embed)
         
-        # 📝 Удаление сообщения (одиночное или массовое)
+        # 📝 Удаление сообщения
         elif entry.action == discord.AuditLogAction.message_delete:
             channel = getattr(entry.extra, 'channel', None)
             channel_mention = channel.mention if channel and hasattr(channel, 'mention') else 'Неизвестный канал'
@@ -1610,7 +1614,6 @@ async def on_audit_log_entry_create(entry):
             channel = getattr(entry.extra, 'channel', None)
             channel_mention = channel.mention if channel and hasattr(channel, 'mention') else 'Неизвестный канал'
             
-            # Пытаемся получить старое и новое сообщение
             old_content = "Не сохранилось"
             new_content = "Не сохранилось"
             
@@ -1720,7 +1723,6 @@ async def on_audit_log_entry_create(entry):
                     after = getattr(entry.changes, f'after_{attr}', None)
                     if before != after:
                         field_name = attr.title()
-                        # Для permissions нужно специальное форматирование
                         if attr == 'permissions':
                             before = before.value if hasattr(before, 'value') else before
                             after = after.value if hasattr(after, 'value') else after
@@ -1740,7 +1742,7 @@ async def on_audit_log_entry_create(entry):
                         embed.add_field(name=name, value=value, inline=inline)
                     await log_ch.send(embed=embed)
         
-        # 👤 Изменение участника (никнейм и т.д.)
+        # 👤 Изменение ролей участника
         elif entry.action == discord.AuditLogAction.member_role_update:
             if entry.target and hasattr(entry.target, 'mention'):
                 embed = discord.Embed(
@@ -1753,62 +1755,9 @@ async def on_audit_log_entry_create(entry):
                     timestamp=datetime.utcnow()
                 )
                 await log_ch.send(embed=embed)
-        
-        # 📋 Изменение прав доступа (overwrites)
-        elif entry.action == discord.AuditLogAction.overwrite_update:
-            embed = discord.Embed(
-                title="📋 Права доступа изменены",
-                description=(
-                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                    f"**Канал:** {entry.target.mention if hasattr(entry.target, 'mention') else entry.target}\n"
-                    f"**Цель:** {entry.extra.target if hasattr(entry.extra, 'target') else 'Неизвестно'}"
-                ),
-                color=0xFAA61A,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 😊 Создание эмодзи
-        elif entry.action == discord.AuditLogAction.emoji_create:
-            embed = discord.Embed(
-                title="😊 Эмодзи создан",
-                description=(
-                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                    f"**Эмодзи:** {entry.target}"
-                ),
-                color=0x57F287,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # 🗑 Удаление эмодзи
-        elif entry.action == discord.AuditLogAction.emoji_delete:
-            embed = discord.Embed(
-                title="🗑 Эмодзи удалён",
-                description=(
-                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                    f"**Эмодзи:** {entry.target}"
-                ),
-                color=0xF04747,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
-        
-        # ✏️ Изменение эмодзи
-        elif entry.action == discord.AuditLogAction.emoji_update:
-            embed = discord.Embed(
-                title="✏️ Эмодзи изменён",
-                description=(
-                    f"**Модератор:** {entry.user.mention if entry.user else 'Неизвестно'}\n"
-                    f"**Эмодзи:** {entry.target}"
-                ),
-                color=0xFAA61A,
-                timestamp=datetime.utcnow()
-            )
-            await log_ch.send(embed=embed)
 
     except Exception as e:
-        print(f"Ошибка в аудит логе: {e}")
+        print(f"❌ Ошибка в аудит логе: {e}")
         print(f"Тип события: {entry.action}")
 # ───────────────────────────────────────────────
 #   КОМАНДЫ (ОСНОВНЫЕ)
