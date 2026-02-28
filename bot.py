@@ -1,3 +1,5 @@
+О! А давай добавим интеграцию Twitch к боту. Когда стример будет запускать стрим то бот перешлёт это на канал и ссылку на стрим.
+Вот код, держи:
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -19,6 +21,7 @@ import sys
 #   НАСТРОЙКИ (БЕЗ ТОКЕНА!)
 # ───────────────────────────────────────────────
 # Токен берется из переменной окружения DISCORD_TOKEN
+# Для локального тестирования можно создать файл .env или установить переменную в системе
 TOKEN = os.getenv('DISCORD_TOKEN')
 if not TOKEN:
     print("❌ ОШИБКА: Не найден токен в переменных окружения!")
@@ -27,6 +30,7 @@ if not TOKEN:
     sys.exit(1)
 
 OWNER_ID = 765476979792150549
+
 FULL_ACCESS_GUILD_ID = 1474623510268739790
 
 MOD_LOG_CHANNEL_ID = 1475291899672657940
@@ -37,24 +41,6 @@ PREFIX = "!"
 WARNINGS_FILE = "warnings.json"
 ECONOMY_FILE = "economy.json"
 CASES_FILE = "cases.json"
-
-# ───────────────────────────────────────────────
-#   НОВЫЕ НАСТРОЙКИ ДЛЯ TWITCH
-# ───────────────────────────────────────────────
-TWITCH_CLIENT_ID = os.getenv('TWITCH_CLIENT_ID')  # ID приложения Twitch
-TWITCH_CLIENT_SECRET = os.getenv('TWITCH_CLIENT_SECRET')  # Секрет приложения Twitch
-TWITCH_ACCESS_TOKEN = None  # Будет получен автоматически
-TWITCH_TOKEN_EXPIRY = 0  # Время истечения токена
-
-# Канал для уведомлений о стримах
-TWITCH_ANNOUNCE_CHANNEL_ID = 1475048502370500639  # Можно изменить на нужный канал
-
-# Файл для хранения подписок на стримеров
-TWITCH_SUBS_FILE = "twitch_subs.json"
-
-# Настройки проверки
-TWITCH_CHECK_INTERVAL = 60  # Проверка каждые 60 секунд
-TWITCH_STREAMER_ROLE_ID = None  # ID роли стримера (можно указать позже)
 
 TICKET_CATEGORY_ID = 1475334525344157807
 SUPPORT_ROLE_ID = 1475331888163066029
@@ -69,19 +55,20 @@ TAX_THRESHOLD = 10000
 TAX_RATE = 0.01
 
 # НАСТРОЙКИ ДЛЯ АВТОМОДЕРАЦИИ
-WARN_AUTO_MUTE_THRESHOLD = 3
-WARN_AUTO_LONG_MUTE_THRESHOLD = 6
-WARN_AUTO_KICK_THRESHOLD = 10
-WARN_EXPIRY_DAYS = 30
+WARN_AUTO_MUTE_THRESHOLD = 3      # 3 варна → мут 1ч
+WARN_AUTO_LONG_MUTE_THRESHOLD = 6  # 6 варнов → мут 24ч
+WARN_AUTO_KICK_THRESHOLD = 10      # 10 варнов → кик
+WARN_EXPIRY_DAYS = 30              # срок действия варна
 
-RAID_JOIN_THRESHOLD = 5
-RAID_TIME_WINDOW = 300
-NEW_ACCOUNT_DAYS = 7
+RAID_JOIN_THRESHOLD = 5            # порог рейда
+RAID_TIME_WINDOW = 300             # окно в секундах (5 минут)
+NEW_ACCOUNT_DAYS = 7                # возраст нового аккаунта
 
 VIP_ROLE_NAMES = ["VIP", "Premium", "Vip", "vip"]
 VIP_SPAM_MULTIPLIER = 2
 VIP_MENTION_MULTIPLIER = 3
 
+# НОВЫЕ НАСТРОЙКИ
 INACTIVE_TICKET_HOURS = 24
 INVESTMENT_MIN_AMOUNT = 1000
 INVESTMENT_MAX_DAYS = 30
@@ -89,6 +76,7 @@ INVESTMENT_BASE_RATE = 0.05
 UNAUTHORIZED_CMD_LIMIT = 3
 UNAUTHORIZED_MUTE_MINUTES = 1
 
+# НАСТРОЙКИ ДЛЯ FAQ
 FAQ_FILE = "faq.json"
 FAQ_CATEGORIES = {
     "общее": "📋 Общие вопросы",
@@ -98,6 +86,7 @@ FAQ_CATEGORIES = {
     "техника": "🔧 Технические вопросы"
 }
 
+# НОВОЕ ОФОРМЛЕНИЕ ДЛЯ ЭКОНОМИКИ
 ECONOMY_EMOJIS = {
     "balance": "💰",
     "vault": "🏦",
@@ -122,8 +111,7 @@ ECONOMY_EMOJIS = {
     "investment": "📈",
     "profit": "💹",
     "risk": "⚠️",
-    "calendar": "📅",
-    "twitch": "📺"  # Новый эмодзи для Twitch
+    "calendar": "📅"
 }
 
 RARITIES = [
@@ -144,16 +132,20 @@ INSULT_PATTERNS = [
     r"\b(заткнись|заткнулся|молчи)\s*(сука|блядь|ебанат)\b"
 ]
 
+# ЦВЕТА ДЛЯ ОФОРМЛЕНИЯ
 COLORS = {
-    "welcome": 0x57F287,
-    "goodbye": 0xF04747,
-    "audit": 0x5865F2,
-    "mod": 0xFAA61A,
-    "economy": 0xFFD700,
-    "ticket": 0x9B59B6,
-    "faq": 0x3498DB,
-    "twitch": 0x9146FF  # Фиолетовый цвет Twitch
+    "welcome": 0x57F287,      # Зеленый
+    "goodbye": 0xF04747,      # Красный
+    "audit": 0x5865F2,        # Синий
+    "mod": 0xFAA61A,          # Оранжевый
+    "economy": 0xFFD700,      # Золотой
+    "ticket": 0x9B59B6,       # Фиолетовый
+    "faq": 0x3498DB           # Голубой
 }
+
+# Остальной код БЕЗ ИЗМЕНЕНИЙ - вся логика бота остается той же
+# Просто удалите старую строку с TOKEN и вставьте весь ваш код сюда
+# (весь код после настроек до запуска)
 
 # ───────────────────────────────────────────────
 #   ГЛОБАЛЬНЫЕ ДАННЫЕ
@@ -167,10 +159,6 @@ temp_roles = {}
 investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
-
-# НОВЫЕ ДАННЫЕ ДЛЯ TWITCH
-twitch_subs = {}  # {streamer_name: {"channel_id": discord_channel_id, "message": "...", "last_stream": timestamp, "live": False}}
-twitch_live_cache = {}  # Кэш для отслеживания текущих стримов
 
 def load_economy():
     global economy_data
@@ -207,27 +195,8 @@ def save_faq():
     with open(FAQ_FILE, "w", encoding="utf-8") as f:
         json.dump(faq_data, f, ensure_ascii=False, indent=2)
 
-# НОВАЯ ФУНКЦИЯ ДЛЯ ЗАГРУЗКИ ПОДПИСОК TWITCH
-def load_twitch_subs():
-    global twitch_subs
-    if os.path.exists(TWITCH_SUBS_FILE):
-        try:
-            with open(TWITCH_SUBS_FILE, "r", encoding="utf-8") as f:
-                twitch_subs = json.load(f)
-        except Exception as e:
-            print(f"Ошибка загрузки twitch_subs.json: {e}")
-            twitch_subs = {}
-    else:
-        twitch_subs = {}
-
-def save_twitch_subs():
-    with open(TWITCH_SUBS_FILE, "w", encoding="utf-8") as f:
-        json.dump(twitch_subs, f, ensure_ascii=False, indent=2)
-
 load_economy()
 load_faq()
-load_twitch_subs()
-
 if "server_vault" not in economy_data:
     economy_data["server_vault"] = 0
     save_economy()
@@ -269,277 +238,6 @@ def save_cases():
 
 load_warnings()
 load_cases()
-
-# ───────────────────────────────────────────────
-#   ФУНКЦИИ ДЛЯ TWITCH INTEGRATION
-# ───────────────────────────────────────────────
-
-async def get_twitch_token():
-    """Получение или обновление токена доступа к Twitch API"""
-    global TWITCH_ACCESS_TOKEN, TWITCH_TOKEN_EXPIRY
-    
-    now = datetime.now().timestamp()
-    
-    # Если токен ещё действителен, возвращаем его
-    if TWITCH_ACCESS_TOKEN and now < TWITCH_TOKEN_EXPIRY - 60:
-        return TWITCH_ACCESS_TOKEN
-    
-    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
-        print("⚠️ Twitch клиент не настроен!")
-        return None
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                'https://id.twitch.tv/oauth2/token',
-                params={
-                    'client_id': TWITCH_CLIENT_ID,
-                    'client_secret': TWITCH_CLIENT_SECRET,
-                    'grant_type': 'client_credentials'
-                }
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    TWITCH_ACCESS_TOKEN = data['access_token']
-                    TWITCH_TOKEN_EXPIRY = now + data['expires_in']
-                    return TWITCH_ACCESS_TOKEN
-                else:
-                    print(f"❌ Ошибка получения токена Twitch: {resp.status}")
-                    return None
-    except Exception as e:
-        print(f"❌ Ошибка при получении токена Twitch: {e}")
-        return None
-
-async def check_twitch_stream(streamer_name: str):
-    """Проверяет, идёт ли стрим у указанного стримера с улучшенной обработкой ошибок"""
-    token = await get_twitch_token()
-    if not token:
-        print("❌ Не удалось получить токен Twitch")
-        return None
-    
-    try:
-        headers = {
-            'Client-ID': TWITCH_CLIENT_ID,
-            'Authorization': f'Bearer {token}'
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            # Сначала получаем информацию о пользователе
-            user_url = 'https://api.twitch.tv/helix/users'
-            async with session.get(
-                user_url,
-                headers=headers,
-                params={'login': streamer_name.lower().strip()}
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    print(f"❌ Ошибка Twitch API (users): {resp.status} - {error_text}")
-                    return None
-                
-                user_data = await resp.json()
-                
-                # Проверяем, найден ли пользователь
-                if not user_data.get('data'):
-                    print(f"❌ Стример '{streamer_name}' не найден на Twitch")
-                    return {'error': 'not_found', 'streamer': streamer_name}
-                
-                user_info = user_data['data'][0]
-                user_id = user_info['id']
-                display_name = user_info['display_name']
-                profile_image = user_info.get('profile_image_url')
-                offline_image = user_info.get('offline_image_url')
-            
-            # Теперь проверяем, идёт ли стрим
-            stream_url = 'https://api.twitch.tv/helix/streams'
-            async with session.get(
-                stream_url,
-                headers=headers,
-                params={'user_id': user_id}
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    print(f"❌ Ошибка Twitch API (streams): {resp.status} - {error_text}")
-                    return {
-                        'is_live': False,
-                        'display_name': display_name,
-                        'profile_image': profile_image,
-                        'offline_image': offline_image,
-                        'url': f'https://twitch.tv/{streamer_name}',
-                        'error': 'stream_check_failed'
-                    }
-                
-                stream_data = await resp.json()
-                
-                if stream_data.get('data'):
-                    stream = stream_data['data'][0]
-                    
-                    # Формируем URL превью (заменяем размеры)
-                    thumbnail = stream['thumbnail_url'].replace('{width}', '1280').replace('{height}', '720')
-                    
-                    # Добавляем timestamp чтобы избежать кэширования
-                    thumbnail = f"{thumbnail}?t={int(datetime.now().timestamp())}"
-                    
-                    return {
-                        'is_live': True,
-                        'title': stream['title'],
-                        'game': stream['game_name'],
-                        'viewers': stream['viewer_count'],
-                        'thumbnail': thumbnail,
-                        'started_at': stream['started_at'],
-                        'display_name': display_name,
-                        'profile_image': profile_image,
-                        'url': f'https://twitch.tv/{streamer_name}'
-                    }
-                else:
-                    return {
-                        'is_live': False,
-                        'display_name': display_name,
-                        'profile_image': profile_image,
-                        'offline_image': offline_image,
-                        'url': f'https://twitch.tv/{streamer_name}'
-                    }
-                    
-    except aiohttp.ClientError as e:
-        print(f"❌ Сетевая ошибка при проверке Twitch стрима {streamer_name}: {e}")
-        return {'error': 'network_error', 'streamer': streamer_name}
-    except Exception as e:
-        print(f"❌ Неизвестная ошибка при проверке Twitch стрима {streamer_name}: {e}")
-        traceback.print_exc()
-        return {'error': 'unknown_error', 'streamer': streamer_name}
-
-@tasks.loop(seconds=TWITCH_CHECK_INTERVAL)
-async def check_twitch_streams_task():
-    """Фоновая задача для проверки стримов с улучшенной обработкой"""
-    if not twitch_subs:
-        return
-    
-    print(f"🔍 Проверка стримов: {len(twitch_subs)} стримеров")
-    
-    for streamer_name, data in list(twitch_subs.items()):
-        try:
-            # Пропускаем если это не наш гильд (для безопасности)
-            guild = bot.get_guild(data.get('guild_id'))
-            if not guild:
-                print(f"⚠️ Гильдия не найдена для стримера {streamer_name}, удаляем")
-                del twitch_subs[streamer_name]
-                save_twitch_subs()
-                continue
-            
-            channel = guild.get_channel(data.get('channel_id'))
-            if not channel:
-                print(f"⚠️ Канал не найден для стримера {streamer_name} на гильдии {guild.name}")
-                # Не удаляем, возможно канал временно недоступен
-                continue
-            
-            result = await check_twitch_stream(streamer_name)
-            
-            # Обрабатываем ошибки
-            if not result:
-                print(f"⚠️ Нет ответа от API для {streamer_name}")
-                continue
-                
-            if result.get('error'):
-                if result['error'] == 'not_found':
-                    print(f"⚠️ Стример {streamer_name} больше не существует на Twitch")
-                    # Можно уведомить модераторов
-                    mod_log = bot.get_channel(MOD_LOG_CHANNEL_ID)
-                    if mod_log:
-                        embed = discord.Embed(
-                            title="⚠️ Стример не найден",
-                            description=f"Стример **{streamer_name}** больше не существует на Twitch и будет удалён из списка.",
-                            color=0xFAA61A
-                        )
-                        await mod_log.send(embed=embed)
-                    del twitch_subs[streamer_name]
-                    save_twitch_subs()
-                continue
-            
-            was_live = data.get('live', False)
-            is_live = result['is_live']
-            
-            # Обновляем display_name если изменился
-            if result.get('display_name') and result['display_name'] != data.get('display_name'):
-                data['display_name'] = result['display_name']
-            
-            # Если стрим только начался
-            if is_live and not was_live:
-                print(f"🔴 {result['display_name']} начал стрим!")
-                
-                # Отправляем уведомление
-                embed = discord.Embed(
-                    title=f"📺 {result['display_name']} начал стрим!",
-                    url=result['url'],
-                    description=f"**{result['title']}**",
-                    color=COLORS["twitch"],
-                    timestamp=datetime.now(timezone.utc)
-                )
-                
-                embed.add_field(name="🎮 Игра", value=result['game'] or "Неизвестно", inline=True)
-                embed.add_field(name="👁️ Зрители", value=format_number(result['viewers']), inline=True)
-                
-                if result.get('thumbnail'):
-                    embed.set_image(url=result['thumbnail'])
-                
-                if result.get('profile_image'):
-                    embed.set_thumbnail(url=result['profile_image'])
-                
-                embed.set_footer(text="Нажми на заголовок, чтобы перейти к стриму!")
-                
-                # Пингуем роль стримера, если она указана
-                content = None
-                if TWITCH_STREAMER_ROLE_ID:
-                    role = guild.get_role(TWITCH_STREAMER_ROLE_ID)
-                    if role:
-                        content = role.mention
-                
-                # Отправляем сообщение
-                message = await channel.send(content=content, embed=embed)
-                
-                # Обновляем данные
-                data['live'] = True
-                data['last_stream'] = datetime.now().timestamp()
-                data['last_message_id'] = message.id
-                data['last_check'] = datetime.now().timestamp()
-                
-                # Логируем в мод-канал
-                await send_mod_log(
-                    title="🔴 Стрим начался",
-                    description=f"**Стример:** [{result['display_name']}]({result['url']})\n"
-                               f"**Игра:** {result['game']}\n"
-                               f"**Зрители:** {format_number(result['viewers'])}",
-                    color=COLORS["twitch"]
-                )
-                
-            # Если стрим закончился
-            elif not is_live and was_live:
-                print(f"⚫ {result['display_name']} закончил стрим")
-                data['live'] = False
-                data['last_check'] = datetime.now().timestamp()
-                
-                # Обновляем предыдущее сообщение
-                if 'last_message_id' in data:
-                    try:
-                        last_msg = await channel.fetch_message(data['last_message_id'])
-                        if last_msg and last_msg.embeds:
-                            new_embed = last_msg.embeds[0]
-                            new_embed.color = 0x808080
-                            new_embed.set_footer(text="🔴 Стрим завершён")
-                            await last_msg.edit(embed=new_embed)
-                    except discord.NotFound:
-                        pass
-                    except Exception as e:
-                        print(f"⚠️ Не удалось обновить сообщение: {e}")
-            
-            else:
-                # Просто обновляем время проверки
-                data['last_check'] = datetime.now().timestamp()
-            
-            # Сохраняем изменения
-            save_twitch_subs()
-            
-        except Exception as e:
-            print(f"❌ Ошибка при проверке стримера {streamer_name}: {e}")
-            traceback.print_exc()
 
 # ───────────────────────────────────────────────
 #   ФУНКЦИИ ДЛЯ ПРОВЕРКИ ПРАВ
@@ -936,12 +634,7 @@ class WelcomeView(View):
             `/pay` - перевести монеты
             `/top` - топ богачей
             `/invest` - инвестировать
-            `/investments` - мои инвестиции
-
-            **Twitch:**
-            `/twitch add` - добавить стримера для уведомлений
-            `/twitch remove` - удалить стримера
-            `/twitch list` - список отслеживаемых стримеров""",
+            `/investments` - мои инвестиции""",
             color=COLORS["welcome"]
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -1035,7 +728,6 @@ class TicketCategorySelect(Select):
             description=f"**Канал:** {ticket_channel.mention}\n**Автор:** {interaction.user}\n**Категория:** {self.values[0]}",
             color=COLORS["ticket"]
         )
-
 class TicketInactivityCheck:
     """Проверка неактивных тикетов"""
     def __init__(self):
@@ -1051,11 +743,13 @@ class TicketInactivityCheck:
                 if not channel.name.startswith(("🔧-", "⚠️-", "❓-", "🤝-", "📌-")):
                     continue
 
+                # Проверяем последнее сообщение
                 async for msg in channel.history(limit=1):
                     last_msg_time = msg.created_at
                     now = datetime.now(timezone.utc)
                     
                     if (now - last_msg_time).total_seconds() > INACTIVE_TICKET_HOURS * 3600:
+                        # Отправляем предупреждение
                         warning_embed = discord.Embed(
                             title="⚠️ Тикет неактивен",
                             description=f"Этот тикет будет автоматически закрыт через 12 часов из-за неактивности.",
@@ -1063,10 +757,13 @@ class TicketInactivityCheck:
                         )
                         await channel.send(embed=warning_embed)
                         
-                        await asyncio.sleep(43200)
+                        # Ждем 12 часов
+                        await asyncio.sleep(43200)  # 12 часов
                         
+                        # Проверяем снова
                         async for new_msg in channel.history(limit=1):
                             if new_msg.id == msg.id:
+                                # Все еще нет новых сообщений - закрываем
                                 transcript = await self.create_transcript(channel)
                                 await channel.delete()
                                 await send_mod_log(
@@ -1195,15 +892,6 @@ class HelpView(View):
                     ("/valute", "Курсы валют"),
                     ("/faq", "Часто задаваемые вопросы")
                 ]
-            },
-            {
-                "name": "📺 Twitch",
-                "emoji": "📺",
-                "commands": [
-                    ("/twitch add", "Добавить стримера"),
-                    ("/twitch remove", "Удалить стримера"),
-                    ("/twitch list", "Список стримеров")
-                ]
             }
         ]
         
@@ -1271,7 +959,7 @@ class HelpView(View):
             return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
         
         is_mod = is_moderator(interaction.user)
-        base = "**📋 Основное**\n**💰 Экономика**\n**🎮 Развлечения**\n**📺 Twitch**"
+        base = "**📋 Основное**\n**💰 Экономика**\n**🎮 Развлечения**"
         mod = "\n**🛡️ Модерация**\n**🎫 Тикеты**" if is_mod else ""
         
         embed = discord.Embed(
@@ -1563,19 +1251,11 @@ async def on_ready():
     bot.add_view(TicketPanelView())
     bot.add_view(TicketControls())
 
-    # Запускаем задачи
     autosave_economy_task.start()
     clean_old_warnings_task.start()
     check_temp_roles_task.start()
     check_investments_task.start()
     check_inactive_tickets_task.start()
-    
-    # Запускаем проверку Twitch стримов
-    if TWITCH_CLIENT_ID and TWITCH_CLIENT_SECRET:
-        check_twitch_streams_task.start()
-        print("✅ Twitch интеграция активирована")
-    else:
-        print("⚠️ Twitch интеграция не настроена (нужны CLIENT_ID и CLIENT_SECRET)")
 
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
@@ -1739,6 +1419,7 @@ async def on_message(message):
 async def on_member_join(member):
     """Красивое приветствие нового участника"""
     try:
+        # Лог в мод-канал
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_ch:
             embed = discord.Embed(
@@ -1756,8 +1437,10 @@ async def on_member_join(member):
             
             await log_ch.send(embed=embed)
         
+        # Приветствие в общий канал
         welcome_ch = bot.get_channel(WELCOME_CHANNEL_ID)
         if welcome_ch:
+            # Статистика сервера
             total = member.guild.member_count
             humans = len([m for m in member.guild.members if not m.bot])
             bots = total - humans
@@ -1770,6 +1453,7 @@ async def on_member_join(member):
             )
             
             embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_image(url="https://i.imgur.com/welcome-banner.png")  # Можно заменить на свой баннер
             
             embed.add_field(name="📝 Имя", value=member.name, inline=True)
             embed.add_field(name="🆔 ID", value=f"`{member.id}`", inline=True)
@@ -1799,6 +1483,7 @@ async def on_member_join(member):
 async def on_member_remove(member):
     """Красивое прощание с участником"""
     try:
+        # Лог в мод-канал
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_ch:
             embed = discord.Embed(
@@ -1811,6 +1496,7 @@ async def on_member_remove(member):
             embed.add_field(name="На сервере был", value=f"<t:{int(member.joined_at.timestamp())}:R>" if member.joined_at else "Неизвестно", inline=True)
             await log_ch.send(embed=embed)
         
+        # Прощание в общий канал
         goodbye_ch = bot.get_channel(GOODBYE_CHANNEL_ID)
         if goodbye_ch:
             days_on_server = 0
@@ -1852,7 +1538,7 @@ def _plural(count, one, few, many):
     return many
 
 # ───────────────────────────────────────────────
-#   УЛУЧШЕННЫЙ АУДИТ-ЛОГ (сокращён для компактности)
+#   УЛУЧШЕННЫЙ АУДИТ-ЛОГ
 # ───────────────────────────────────────────────
 
 async def get_audit_info(guild, action, target_id=None, limit=5):
@@ -1958,6 +1644,457 @@ async def on_message_edit(before, after):
     except Exception as e:
         print(f"Ошибка в on_message_edit: {e}")
 
+@bot.event
+async def on_member_update(before, after):
+    """Лог изменений участника"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        # Никнейм
+        if before.nick != after.nick:
+            embed = discord.Embed(
+                title="👤 Никнейм изменён",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=after.mention, inline=False)
+            embed.add_field(name="Было", value=before.nick or "*Не указан*", inline=True)
+            embed.add_field(name="Стало", value=after.nick or "*Не указан*", inline=True)
+            
+            audit = await get_audit_info(after.guild, discord.AuditLogAction.member_update, after.id)
+            if audit and audit["moderator"]:
+                embed.add_field(name="Изменил", value=audit["moderator"].mention, inline=False)
+            
+            await log_ch.send(embed=embed)
+        
+        # Роли
+        if before.roles != after.roles:
+            added = [r for r in after.roles if r not in before.roles and r.name != "@everyone"]
+            removed = [r for r in before.roles if r not in after.roles and r.name != "@everyone"]
+            
+            if added or removed:
+                embed = discord.Embed(
+                    title="👤 Роли изменены",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=after.mention, inline=False)
+                if added:
+                    embed.add_field(name="✅ Добавлены", value=", ".join([r.mention for r in added]), inline=False)
+                if removed:
+                    embed.add_field(name="❌ Удалены", value=", ".join([r.mention for r in removed]), inline=False)
+                
+                audit = await get_audit_info(after.guild, discord.AuditLogAction.member_role_update, after.id)
+                if audit and audit["moderator"]:
+                    embed.add_field(name="Изменил", value=audit["moderator"].mention, inline=False)
+                
+                await log_ch.send(embed=embed)
+        
+        # Мут/таймаут
+        if before.timed_out_until != after.timed_out_until:
+            if after.timed_out_until:
+                duration = after.timed_out_until - datetime.now(timezone.utc)
+                hours = duration.days * 24 + duration.seconds // 3600
+                minutes = (duration.seconds % 3600) // 60
+                duration_text = f"{hours}ч {minutes}м"
+                
+                audit = await get_audit_info(after.guild, discord.AuditLogAction.member_update, after.id)
+                moderator = audit["moderator"] if audit else None
+                
+                case_id = await create_case(after, moderator or bot.user, "Мут", "Автоматически", duration_text)
+                
+                embed = discord.Embed(
+                    title="🔇 Пользователь замучен",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=after.mention, inline=False)
+                embed.add_field(name="Длительность", value=duration_text, inline=True)
+                embed.add_field(name="До", value=f"<t:{int(after.timed_out_until.timestamp())}:R>", inline=True)
+                if moderator:
+                    embed.add_field(name="Модератор", value=moderator.mention, inline=True)
+                embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
+                await log_ch.send(embed=embed)
+            else:
+                audit = await get_audit_info(after.guild, discord.AuditLogAction.member_update, after.id)
+                moderator = audit["moderator"] if audit else None
+                
+                case_id = await create_case(after, moderator or bot.user, "Снятие мута", "Автоматически")
+                embed = discord.Embed(
+                    title="🔊 Мут снят",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=after.mention, inline=False)
+                if moderator:
+                    embed.add_field(name="Модератор", value=moderator.mention, inline=True)
+                embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
+                await log_ch.send(embed=embed)
+                
+    except Exception as e:
+        print(f"Ошибка в on_member_update: {e}")
+
+@bot.event
+async def on_member_ban(guild, user):
+    """Лог бана"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        reason = None
+        
+        try:
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+                if entry.target.id == user.id:
+                    moderator = entry.user
+                    reason = entry.reason
+                    break
+        except:
+            pass
+        
+        case_id = await create_case(user, moderator or bot.user, "Бан", reason or "Не указана")
+        
+        embed = discord.Embed(
+            title="🔨 Пользователь забанен",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
+        if moderator:
+            embed.add_field(name="Модератор", value=f"{moderator.mention}\nID: `{moderator.id}`", inline=False)
+        if reason:
+            embed.add_field(name="Причина", value=reason, inline=False)
+        embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_member_ban: {e}")
+
+@bot.event
+async def on_member_unban(guild, user):
+    """Лог разбана"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        
+        try:
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.unban):
+                if entry.target.id == user.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🔓 Пользователь разбанен",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
+        if moderator:
+            embed.add_field(name="Модератор", value=f"{moderator.mention}\nID: `{moderator.id}`", inline=False)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_member_unban: {e}")
+
+@bot.event
+async def on_guild_channel_create(channel):
+    """Лог создания канала"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_create):
+                if entry.target.id == channel.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="📢 Канал создан",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Название", value=channel.mention, inline=True)
+        embed.add_field(name="Тип", value="Текстовый" if isinstance(channel, discord.TextChannel) else "Голосовой", inline=True)
+        embed.add_field(name="Категория", value=channel.category.name if channel.category else "Нет", inline=True)
+        if moderator:
+            embed.add_field(name="Создал", value=moderator.mention, inline=True)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_channel_create: {e}")
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    """Лог удаления канала"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+                if entry.target.id == channel.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🗑 Канал удалён",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Название", value=channel.name, inline=True)
+        embed.add_field(name="Тип", value="Текстовый" if isinstance(channel, discord.TextChannel) else "Голосовой", inline=True)
+        if moderator:
+            embed.add_field(name="Удалил", value=moderator.mention, inline=True)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_channel_delete: {e}")
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    """Лог изменения канала"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        changes = []
+        
+        if before.name != after.name:
+            changes.append(f"**Название:** {before.name} → {after.name}")
+        
+        if before.category != after.category:
+            before_cat = before.category.name if before.category else "Нет"
+            after_cat = after.category.name if after.category else "Нет"
+            changes.append(f"**Категория:** {before_cat} → {after_cat}")
+        
+        if isinstance(before, discord.TextChannel) and isinstance(after, discord.TextChannel):
+            if before.topic != after.topic:
+                changes.append(f"**Тема изменена**")
+        
+        if changes:
+            moderator = None
+            try:
+                async for entry in after.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_update):
+                    if entry.target.id == after.id:
+                        moderator = entry.user
+                        break
+            except:
+                pass
+            
+            embed = discord.Embed(
+                title="✏️ Канал изменён",
+                description="\n".join(changes),
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Канал", value=after.mention, inline=True)
+            if moderator:
+                embed.add_field(name="Изменил", value=moderator.mention, inline=True)
+            
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_guild_channel_update: {e}")
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    """Лог голосовых каналов"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        if before.channel is None and after.channel is not None:
+            embed = discord.Embed(
+                title="🔊 Подключился к голосовому",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=True)
+            embed.add_field(name="Канал", value=after.channel.mention, inline=True)
+            await log_ch.send(embed=embed)
+        
+        elif before.channel is not None and after.channel is None:
+            embed = discord.Embed(
+                title="🔇 Отключился от голосового",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=True)
+            embed.add_field(name="Канал", value=before.channel.mention, inline=True)
+            await log_ch.send(embed=embed)
+        
+        elif before.channel != after.channel and before.channel is not None and after.channel is not None:
+            embed = discord.Embed(
+                title="🔄 Переместился в голосовом",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=False)
+            embed.add_field(name="Было", value=before.channel.mention, inline=True)
+            embed.add_field(name="Стало", value=after.channel.mention, inline=True)
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_voice_state_update: {e}")
+
+@bot.event
+async def on_guild_role_create(role):
+    """Лог создания роли"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_create):
+                if entry.target.id == role.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🎨 Роль создана",
+            color=role.color if role.color.value != 0 else COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Название", value=role.mention, inline=True)
+        embed.add_field(name="Цвет", value=f"#{role.color.value:06x}" if role.color.value != 0 else "Стандартный", inline=True)
+        if moderator:
+            embed.add_field(name="Создал", value=moderator.mention, inline=True)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_role_create: {e}")
+
+@bot.event
+async def on_guild_role_delete(role):
+    """Лог удаления роли"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
+                if entry.target.id == role.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🗑 Роль удалена",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Название", value=role.name, inline=True)
+        if moderator:
+            embed.add_field(name="Удалил", value=moderator.mention, inline=True)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_role_delete: {e}")
+
+@bot.event
+async def on_guild_role_update(before, after):
+    """Лог изменения роли"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        changes = []
+        
+        if before.name != after.name:
+            changes.append(f"**Название:** {before.name} → {after.name}")
+        
+        if before.color != after.color:
+            before_color = f"#{before.color.value:06x}" if before.color.value != 0 else "Стандартный"
+            after_color = f"#{after.color.value:06x}" if after.color.value != 0 else "Стандартный"
+            changes.append(f"**Цвет:** {before_color} → {after_color}")
+        
+        if before.permissions != after.permissions:
+            changes.append(f"**Права изменены**")
+        
+        if changes:
+            moderator = None
+            try:
+                async for entry in after.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_update):
+                    if entry.target.id == after.id:
+                        moderator = entry.user
+                        break
+            except:
+                pass
+            
+            embed = discord.Embed(
+                title="✏️ Роль изменена",
+                description="\n".join(changes),
+                color=after.color if after.color.value != 0 else COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Роль", value=after.mention, inline=True)
+            if moderator:
+                embed.add_field(name="Изменил", value=moderator.mention, inline=True)
+            
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_guild_role_update: {e}")
+
+@bot.event
+async def on_guild_update(before, after):
+    """Лог изменений сервера"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        changes = []
+        
+        if before.name != after.name:
+            changes.append(f"**Название:** {before.name} → {after.name}")
+        
+        if before.icon != after.icon:
+            changes.append(f"**Иконка изменена**")
+        
+        if before.premium_tier != after.premium_tier:
+            changes.append(f"**Уровень буста:** {before.premium_tier} → {after.premium_tier}")
+        
+        if changes:
+            embed = discord.Embed(
+                title="🔧 Сервер изменён",
+                description="\n".join(changes),
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_guild_update: {e}")
+
 # ───────────────────────────────────────────────
 #   КОМАНДЫ
 # ───────────────────────────────────────────────
@@ -1965,8 +2102,10 @@ async def on_message_edit(before, after):
 @bot.hybrid_command(name="ping", description="Подробная информация о боте")
 async def ping(ctx: commands.Context):
     try:
+        # Задержки
         latency = round(bot.latency * 1000)
         
+        # Время работы
         uptime = datetime.now(timezone.utc) - bot.launch_time
         days = uptime.days
         hours, remainder = divmod(uptime.seconds, 3600)
@@ -1981,12 +2120,15 @@ async def ping(ctx: commands.Context):
         else:
             uptime_str = f"{seconds}с"
         
+        # Статистика
         guild_count = len(bot.guilds)
         user_count = sum(g.member_count for g in bot.guilds if g.member_count)
         channel_count = sum(len(g.channels) for g in bot.guilds)
         
+        # Пинг в разных регионах (эмуляция)
         ping_status = "🟢 Отлично" if latency < 200 else "🟡 Средне" if latency < 300 else "🔴 Плохо"
         
+        # Создаем красивый embed
         embed = discord.Embed(
             title="🏓 **ПОНГ!**",
             description="```Статус бота и производительность```",
@@ -1994,6 +2136,7 @@ async def ping(ctx: commands.Context):
             timestamp=datetime.now(timezone.utc)
         )
         
+        # Основная информация
         embed.add_field(
             name="📊 **Основная информация**",
             value=f"```yml\n"
@@ -2007,6 +2150,7 @@ async def ping(ctx: commands.Context):
             inline=False
         )
         
+        # Детали задержки
         embed.add_field(
             name="⏱️ **Детали задержки**",
             value=f"```diff\n"
@@ -2017,6 +2161,7 @@ async def ping(ctx: commands.Context):
             inline=True
         )
         
+        # Статистика команд
         command_count = len(bot.commands)
         hybrid_count = len([c for c in bot.commands if isinstance(c, commands.HybridCommand)])
         
@@ -2030,12 +2175,14 @@ async def ping(ctx: commands.Context):
             inline=True
         )
         
+        # Красивое оформление
         embed.set_thumbnail(url=bot.user.display_avatar.url)
         embed.set_footer(
             text=f"MortisPlay • Запросил: {ctx.author.display_name}",
             icon_url=ctx.author.display_avatar.url
         )
         
+        # Добавляем кнопку для проверки
         view = View(timeout=60)
         button = Button(label="🔄 Обновить", style=discord.ButtonStyle.primary)
         
@@ -2043,6 +2190,7 @@ async def ping(ctx: commands.Context):
             if interaction.user.id != ctx.author.id:
                 return await interaction.response.send_message("❌ Это не твоя команда!", ephemeral=True)
             
+            # Обновляем данные
             new_latency = round(bot.latency * 1000)
             new_uptime = datetime.now(timezone.utc) - bot.launch_time
             new_days = new_uptime.days
@@ -2173,6 +2321,7 @@ async def userinfo(ctx: commands.Context, member: discord.Member = None):
         embed.add_field(name="🚀 Бустер", value=booster_text, inline=True)
         embed.add_field(name="🏆 Высшая роль", value=fresh_member.top_role.mention if fresh_member.top_role != guild.default_role else "Нет", inline=False)
 
+        # Добавляем биографию для бота
         if fresh_member.id == bot.user.id:
             embed.add_field(name="📝 Биография", value="Я многофункциональный бот для Discord, созданный для автоматизации модерации, экономики и развлечений. Разработан специально для сервера MortisPlay!", inline=False)
 
@@ -2184,6 +2333,7 @@ async def userinfo(ctx: commands.Context, member: discord.Member = None):
 
     except Exception as e:
         await send_error_embed(ctx, f"Не удалось загрузить информацию: {str(e)}")
+        
 
 @bot.hybrid_command(name="stats", description="Статистика сервера")
 async def stats(ctx: commands.Context):
@@ -2268,7 +2418,7 @@ async def say(
         await send_error_embed(ctx, str(e))
 
 # ───────────────────────────────────────────────
-#   ЭКОНОМИКА (СОКРАЩЕНО ДЛЯ КОМПАКТНОСТИ)
+#   ЭКОНОМИКА
 # ───────────────────────────────────────────────
 
 @bot.hybrid_command(name="pay", description="💸 Перевести монеты")
@@ -2316,7 +2466,7 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
         if tax > 0:
             embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']} (1% > 10к)", inline=False)
 
-        embed.set_footer(text="Экономика v0.1", icon_url=bot.user.display_avatar.url)
+        embed.set_footer(text="Экономика v1.0", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
         
         try:
@@ -2459,62 +2609,6 @@ async def my_investments(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="twitchtest", description="🔧 Тест Twitch API (только для админов)")
-@app_commands.describe(streamer="Имя стримера для теста")
-async def twitch_test(ctx: commands.Context, streamer: str):
-    """Тестовая команда для проверки Twitch API"""
-    if ctx.author.id != OWNER_ID:
-        return await ctx.send("❌ Только для разработчика!", ephemeral=True)
-    
-    await ctx.defer(ephemeral=True)
-    
-    embed = discord.Embed(
-        title="🔧 Twitch API Test",
-        description=f"Проверка стримера: **{streamer}**",
-        color=COLORS["twitch"]
-    )
-    
-    # Проверяем наличие переменных
-    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
-        embed.add_field(
-            name="❌ Конфигурация",
-            value="TWITCH_CLIENT_ID или TWITCH_CLIENT_SECRET не заданы!",
-            inline=False
-        )
-        return await ctx.send(embed=embed, ephemeral=True)
-    
-    embed.add_field(name="Client ID", value=f"`{TWITCH_CLIENT_ID[:10]}...`" if TWITCH_CLIENT_ID else "❌", inline=True)
-    embed.add_field(name="Client Secret", value="✅" if TWITCH_CLIENT_SECRET else "❌", inline=True)
-    
-    # Получаем токен
-    token = await get_twitch_token()
-    if token:
-        embed.add_field(name="Токен", value="✅ Получен", inline=True)
-    else:
-        embed.add_field(name="Токен", value="❌ Не получен", inline=True)
-        await ctx.send(embed=embed, ephemeral=True)
-        return
-    
-    # Проверяем стримера
-    result = await check_twitch_stream(streamer)
-    
-    if result and result.get('error') == 'not_found':
-        embed.add_field(name="Результат", value="❌ Стример не найден", inline=False)
-    elif result and result.get('is_live'):
-        embed.add_field(name="Результат", value="🔴 **LIVE!**", inline=False)
-        embed.add_field(name="Название", value=result['title'][:100], inline=False)
-        embed.add_field(name="Игра", value=result['game'], inline=True)
-        embed.add_field(name="Зрители", value=format_number(result['viewers']), inline=True)
-    elif result:
-        embed.add_field(name="Результат", value="⚫ Офлайн", inline=False)
-    else:
-        embed.add_field(name="Результат", value="❌ Ошибка запроса", inline=False)
-    
-    if result and result.get('display_name'):
-        embed.add_field(name="Отображаемое имя", value=result['display_name'], inline=True)
-    
-    await ctx.send(embed=embed, ephemeral=True)
-
 # ───────────────────────────────────────────────
 #   СИСТЕМА КЕЙСОВ
 # ───────────────────────────────────────────────
@@ -2567,7 +2661,7 @@ async def help_command(ctx: commands.Context):
         
         embed = discord.Embed(
             title="🤖 Помощь по командам",
-            description="**📋 Основное**\n**💰 Экономика**\n**🎮 Развлечения**\n**📺 Twitch**" +
+            description="**📋 Основное**\n**💰 Экономика**\n**🎮 Развлечения**" +
                        ("\n**🛡️ Модерация**\n**🎫 Тикеты**" if is_mod else ""),
             color=COLORS["welcome"]
         )
@@ -2707,7 +2801,7 @@ async def valute(ctx: commands.Context):
         await send_error_embed(ctx, str(e))
 
 # ───────────────────────────────────────────────
-#   МОДЕРАЦИЯ (СОКРАЩЕНО ДЛЯ КОМПАКТНОСТИ)
+#   МОДЕРАЦИЯ
 # ───────────────────────────────────────────────
 
 @bot.hybrid_command(name="warn", description="Выдать предупреждение")
@@ -2790,281 +2884,265 @@ async def warnings(ctx: commands.Context, member: discord.Member):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-# ───────────────────────────────────────────────
-#   НОВЫЕ КОМАНДЫ ДЛЯ TWITCH
-# ───────────────────────────────────────────────
-
-@bot.hybrid_group(name="twitch", description="📺 Управление Twitch уведомлениями")
-async def twitch(ctx: commands.Context):
-    if ctx.invoked_subcommand is None:
-        embed = discord.Embed(
-            title="📺 Twitch команды",
-            description="Использование:\n"
-                       "`/twitch add <streamer>` - добавить стримера\n"
-                       "`/twitch remove <streamer>` - удалить стримера\n"
-                       "`/twitch list` - список стримеров\n"
-                       "`/twitch setchannel <канал>` - установить канал для уведомлений\n"
-                       "`/twitch setrole <роль>` - установить роль для пинга",
-            color=COLORS["twitch"]
-        )
-        await ctx.send(embed=embed, ephemeral=True)
-
-@twitch.command(name="add", description="Добавить стримера для отслеживания")
-@app_commands.describe(streamer="Имя стримера на Twitch", channel="Канал для уведомлений (по умолчанию текущий)")
-async def twitch_add(ctx: commands.Context, streamer: str, channel: discord.TextChannel = None):
+@bot.hybrid_command(name="clearwarn", description="Очистить предупреждения")
+@app_commands.describe(member="Пользователь", warn_id="all или номер")
+@commands.has_permissions(administrator=True)
+async def clearwarn(ctx: commands.Context, member: discord.Member, warn_id: str = "all"):
     try:
-        if not ctx.author.guild_permissions.manage_messages:
+        if not ctx.author.guild_permissions.administrator:
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
-        if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
-            embed = discord.Embed(
-                title="❌ Twitch не настроен",
-                description="Администратор не настроил Twitch интеграцию.\n"
-                           "Необходимо добавить переменные окружения:\n"
-                           "`TWITCH_CLIENT_ID` и `TWITCH_CLIENT_SECRET`",
-                color=0xF04747
-            )
-            return await ctx.send(embed=embed, ephemeral=True)
-
-        # Отправляем "думаю" сообщение
-        await ctx.defer(ephemeral=True)
+        user_id = str(member.id)
+        if user_id not in warnings_data or not warnings_data[user_id]:
+            return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
         
-        streamer = streamer.lower().strip()
-        channel = channel or ctx.channel
-        
-        # Проверяем, существует ли такой стример
-        result = await check_twitch_stream(streamer)
-        
-        # Обрабатываем ошибки
-        if result and result.get('error') == 'not_found':
-            embed = discord.Embed(
-                title="❌ Стример не найден",
-                description=f"Стример **{streamer}** не найден на Twitch!\n\n"
-                           f"**Проверьте:**\n"
-                           f"• Правильно ли написано имя?\n"
-                           f"• Существует ли такой канал?\n"
-                           f"• Попробуйте найти канал на [twitch.tv](https://www.twitch.tv/{streamer})",
-                color=0xF04747
-            )
-            embed.set_footer(text="Имена на Twitch чувствительны к регистру, но мы ищем без учёта регистра")
-            return await ctx.send(embed=embed, ephemeral=True)
-        
-        if result and result.get('error') == 'network_error':
-            embed = discord.Embed(
-                title="❌ Ошибка сети",
-                description=f"Не удалось подключиться к Twitch API. Попробуйте позже.",
-                color=0xF04747
-            )
-            return await ctx.send(embed=embed, ephemeral=True)
-        
-        if not result:
-            embed = discord.Embed(
-                title="❌ Ошибка проверки",
-                description=f"Не удалось проверить стримера **{streamer}**. Возможные причины:\n"
-                           f"• Twitch API временно недоступен\n"
-                           f"• Проблемы с подключением\n"
-                           f"• Неверные Client ID или Secret",
-                color=0xF04747
-            )
-            return await ctx.send(embed=embed, ephemeral=True)
-        
-        # Проверяем, не отслеживаем ли мы уже этого стримера
-        if streamer in twitch_subs:
-            old_data = twitch_subs[streamer]
-            if old_data.get('guild_id') == ctx.guild.id:
-                embed = discord.Embed(
-                    title="⚠️ Уже отслеживается",
-                    description=f"Стример **{result.get('display_name', streamer)}** уже отслеживается!\n"
-                               f"Канал уведомлений: <#{old_data['channel_id']}>",
-                    color=0xFAA61A
-                )
-                return await ctx.send(embed=embed, ephemeral=True)
-            else:
-                # Если стример есть в другом сервере, всё равно можем добавить для этого сервера
-                pass
-        
-        # Сохраняем стримера
-        twitch_subs[streamer] = {
-            "channel_id": channel.id,
-            "guild_id": ctx.guild.id,
-            "added_by": ctx.author.id,
-            "added_at": datetime.now(timezone.utc).timestamp(),
-            "live": False,
-            "display_name": result.get('display_name', streamer),
-            "last_check": datetime.now(timezone.utc).timestamp()
-        }
-        save_twitch_subs()
-        
-        # Создаём красивое подтверждение
-        embed = discord.Embed(
-            title="✅ Стример добавлен!",
-            description=f"Теперь я буду отслеживать **{result.get('display_name', streamer)}**",
-            color=COLORS["twitch"]
-        )
-        
-        # Добавляем информацию о стримере
-        if result.get('profile_image'):
-            embed.set_thumbnail(url=result['profile_image'])
-        
-        embed.add_field(name="📺 Twitch канал", value=f"[{result.get('display_name', streamer)}](https://twitch.tv/{streamer})", inline=True)
-        embed.add_field(name="📢 Канал уведомлений", value=channel.mention, inline=True)
-        
-        # Проверяем, онлайн ли сейчас стример
-        if result.get('is_live'):
-            embed.add_field(
-                name="🔴 Текущий статус", 
-                value=f"**LIVE!**\n🎮 {result.get('game', 'Неизвестно')}\n👁️ {format_number(result.get('viewers', 0))} зрителей",
-                inline=False
+        if warn_id.lower() == "all":
+            del warnings_data[user_id]
+            save_warnings()
+            await ctx.send(f"✅ Все предупреждения {member.mention} удалены.", ephemeral=True)
+            await send_mod_log(
+                title="🧹 Очистка предупреждений",
+                description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}",
+                color=COLORS["mod"]
             )
         else:
-            embed.add_field(name="⚫ Текущий статус", value="Офлайн", inline=True)
-        
-        embed.set_footer(text=f"Добавил: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
-        
-        await ctx.send(embed=embed, ephemeral=True)
-        
-        # Логируем в мод-канал
-        await send_mod_log(
-            title="📺 Добавлен стример",
-            description=f"**Стример:** [{result.get('display_name', streamer)}](https://twitch.tv/{streamer})\n"
-                       f"**Канал:** {channel.mention}\n"
-                       f"**Добавил:** {ctx.author.mention}",
-            color=COLORS["twitch"]
-        )
-        
+            await ctx.send("❌ Удаление конкретного предупреждения пока не реализовано.", ephemeral=True)
+            
     except Exception as e:
-        print(f"❌ Ошибка в twitch_add: {e}")
-        traceback.print_exc()
-        
-        embed = discord.Embed(
-            title="❌ Непредвиденная ошибка",
-            description=f"Произошла ошибка при добавлении стримера:\n```{str(e)}```",
-            color=0xF04747
-        )
-        await ctx.send(embed=embed, ephemeral=True)
+        await send_error_embed(ctx, str(e))
 
-@twitch.command(name="remove", description="Удалить стримера из отслеживания")
-@app_commands.describe(streamer="Имя стримера на Twitch")
-async def twitch_remove(ctx: commands.Context, streamer: str):
+@bot.hybrid_command(name="mute", description="Замутить пользователя")
+@app_commands.describe(member="Пользователь", duration="1h, 1d, 30m", reason="Причина")
+@commands.has_permissions(manage_messages=True)
+async def mute(ctx: commands.Context, member: discord.Member, duration: str, *, reason: str = "Не указана"):
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
-        streamer = streamer.lower()
+        if is_protected_from_automod(member):
+            return await ctx.send("❌ Нельзя замутить этого пользователя!", ephemeral=True)
         
-        if streamer not in twitch_subs:
-            return await ctx.send(f"❌ Стример **{streamer}** не отслеживается!", ephemeral=True)
+        seconds = 0
+        if duration.endswith("h"):
+            seconds = int(duration[:-1]) * 3600
+        elif duration.endswith("d"):
+            seconds = int(duration[:-1]) * 86400
+        elif duration.endswith("m"):
+            seconds = int(duration[:-1]) * 60
+        elif duration.endswith("s"):
+            seconds = int(duration[:-1])
+        else:
+            seconds = int(duration) * 60
         
-        # Проверяем, что это тот же сервер
-        if twitch_subs[streamer].get('guild_id') != ctx.guild.id:
-            return await ctx.send("❌ Этот стример отслеживается на другом сервере!", ephemeral=True)
+        if seconds <= 0:
+            return await ctx.send("❌ Некорректная длительность!", ephemeral=True)
         
-        display_name = twitch_subs[streamer].get('display_name', streamer)
-        del twitch_subs[streamer]
-        save_twitch_subs()
+        delta = timedelta(seconds=seconds)
+        await member.timeout(delta, reason=reason)
+        
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        dur_text = f"{hours}ч {minutes}м" if hours > 0 else f"{minutes}м"
+        
+        case_id = await create_case(member, ctx.author, "Мут", reason, dur_text)
+        
+        await send_punishment_log(
+            member=member,
+            punishment_type="🔇 Мут",
+            duration=dur_text,
+            reason=reason,
+            moderator=ctx.author,
+            case_id=case_id
+        )
         
         embed = discord.Embed(
-            title="✅ Стример удалён",
-            description=f"**{display_name}** больше не отслеживается.",
-            color=COLORS["twitch"]
+            title="🔇 Пользователь замучен",
+            description=f"**Пользователь:** {member.mention}\n**Длительность:** {dur_text}\n**Причина:** {reason}",
+            color=COLORS["mod"]
+        )
+        await ctx.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await send_error_embed(ctx, str(e))
+
+@bot.hybrid_command(name="unmute", description="Снять мут")
+@app_commands.describe(member="Пользователь", reason="Причина")
+@commands.has_permissions(manage_messages=True)
+async def unmute(ctx: commands.Context, member: discord.Member, *, reason: str = "Не указана"):
+    try:
+        if not ctx.author.guild_permissions.manage_messages:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
+        await member.timeout(None, reason=reason)
+        case_id = await create_case(member, ctx.author, "Снятие мута", reason)
+        
+        await send_punishment_log(
+            member=member,
+            punishment_type="🔊 Мут снят",
+            duration="—",
+            reason=reason,
+            moderator=ctx.author,
+            case_id=case_id
+        )
+        
+        embed = discord.Embed(
+            title="🔊 Мут снят",
+            description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}",
+            color=COLORS["mod"]
+        )
+        await ctx.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        await send_error_embed(ctx, str(e))
+
+@bot.hybrid_command(name="temprole", description="Временная роль")
+@app_commands.describe(member="Пользователь", role="Роль", duration="1h, 1d, 30m")
+@commands.has_permissions(manage_roles=True)
+async def temprole(ctx: commands.Context, member: discord.Member, role: discord.Role, duration: str):
+    try:
+        if not ctx.author.guild_permissions.manage_roles:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
+        if role >= ctx.author.top_role and ctx.author.id != OWNER_ID:
+            return await ctx.send("❌ Нельзя выдать роль выше своей!", ephemeral=True)
+        
+        seconds = 0
+        if duration.endswith("h"):
+            seconds = int(duration[:-1]) * 3600
+        elif duration.endswith("d"):
+            seconds = int(duration[:-1]) * 86400
+        elif duration.endswith("m"):
+            seconds = int(duration[:-1]) * 60
+        else:
+            seconds = int(duration) * 60
+        
+        if seconds <= 0:
+            return await ctx.send("❌ Некорректная длительность!", ephemeral=True)
+        
+        await member.add_roles(role, reason=f"Временная роль от {ctx.author}")
+        
+        user_id = str(member.id)
+        temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + seconds
+        
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        dur_text = f"{hours}ч {minutes}м" if hours > 0 else f"{minutes}м"
+        
+        embed = discord.Embed(
+            title="⏱️ Временная роль",
+            description=f"**Пользователь:** {member.mention}\n**Роль:** {role.mention}\n**Длительность:** {dur_text}",
+            color=COLORS["mod"]
         )
         await ctx.send(embed=embed, ephemeral=True)
         
         await send_mod_log(
-            title="📺 Удалён стример",
-            description=f"**Стример:** {display_name}\n**Удалил:** {ctx.author.mention}",
-            color=COLORS["twitch"]
+            title="⏱️ Временная роль",
+            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Роль:** {role.mention}\n**Длительность:** {dur_text}",
+            color=COLORS["mod"]
         )
         
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@twitch.command(name="list", description="Список отслеживаемых стримеров")
-async def twitch_list(ctx: commands.Context):
+@bot.hybrid_command(name="ticket", description="Управление тикетами")
+@app_commands.describe(action="setup / close")
+@commands.has_permissions(manage_channels=True)
+async def ticket(ctx: commands.Context, action: str = "setup"):
     try:
-        guild_subs = {name: data for name, data in twitch_subs.items() if data.get('guild_id') == ctx.guild.id}
-        
-        if not guild_subs:
-            return await ctx.send("📺 На этом сервере нет отслеживаемых стримеров.", ephemeral=True)
-        
-        embed = discord.Embed(
-            title="📺 Отслеживаемые стримеры",
-            color=COLORS["twitch"],
-            timestamp=datetime.now(timezone.utc)
-        )
-        
-        for streamer, data in guild_subs.items():
-            channel = bot.get_channel(data.get('channel_id'))
-            channel_mention = channel.mention if channel else "❌ Канал удалён"
-            
-            status = "🔴 **LIVE**" if data.get('live') else "⚫ Офлайн"
-            
-            embed.add_field(
-                name=f"{data.get('display_name', streamer)}",
-                value=f"**Статус:** {status}\n**Канал:** {channel_mention}\n**Добавлен:** <t:{int(data.get('added_at', 0))}:R>",
-                inline=False
+        if not ctx.author.guild_permissions.manage_channels:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
+        if not has_full_access(ctx.guild.id):
+            return await ctx.send("❌ Команда только на сервере разработчика.", ephemeral=True)
+
+        action = action.lower()
+        if action == "setup":
+            embed = discord.Embed(
+                title="🎫 Система тикетов",
+                description="Нажми кнопку, чтобы создать тикет",
+                color=COLORS["ticket"]
             )
-        
-        await ctx.send(embed=embed, ephemeral=True)
-        
-    except Exception as e:
-        await send_error_embed(ctx, str(e))
-
-@twitch.command(name="setchannel", description="Установить канал для уведомлений о стримах")
-@app_commands.describe(streamer="Имя стримера", channel="Новый канал")
-async def twitch_setchannel(ctx: commands.Context, streamer: str, channel: discord.TextChannel):
-    try:
-        if not ctx.author.guild_permissions.manage_messages:
-            await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ Нет прав!", ephemeral=True)
-
-        streamer = streamer.lower()
-        
-        if streamer not in twitch_subs:
-            return await ctx.send(f"❌ Стример **{streamer}** не отслеживается!", ephemeral=True)
-        
-        if twitch_subs[streamer].get('guild_id') != ctx.guild.id:
-            return await ctx.send("❌ Этот стример отслеживается на другом сервере!", ephemeral=True)
-        
-        twitch_subs[streamer]['channel_id'] = channel.id
-        save_twitch_subs()
-        
-        embed = discord.Embed(
-            title="✅ Канал обновлён",
-            description=f"Для **{twitch_subs[streamer].get('display_name', streamer)}** установлен канал {channel.mention}",
-            color=COLORS["twitch"]
-        )
-        await ctx.send(embed=embed, ephemeral=True)
-        
-    except Exception as e:
-        await send_error_embed(ctx, str(e))
-
-@twitch.command(name="setrole", description="Установить роль для пинга при стриме")
-@app_commands.describe(role="Роль для пинга (или 'none' для отключения)")
-async def twitch_setrole(ctx: commands.Context, role: discord.Role = None):
-    try:
-        if not ctx.author.guild_permissions.manage_messages:
-            await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ Нет прав!", ephemeral=True)
-
-        global TWITCH_STREAMER_ROLE_ID
-        
-        if role:
-            TWITCH_STREAMER_ROLE_ID = role.id
-            text = f"Роль {role.mention} будет пинговаться при начале стрима."
+            view = TicketPanelView()
+            await ctx.send(embed=embed, view=view)
+            await ctx.send("✅ Панель создана!", delete_after=10)
+        elif action == "close":
+            if not any(ctx.channel.name.startswith(p) for p in ["🔧-", "⚠️-", "❓-", "🤝-", "📌-"]):
+                return await ctx.send("❌ Это не тикет!", ephemeral=True)
+            await ctx.send("🔒 Закрываю...")
+            await asyncio.sleep(5)
+            await ctx.channel.delete()
         else:
-            TWITCH_STREAMER_ROLE_ID = None
-            text = "Пинг роли отключён."
+            await ctx.send("Использование: `/ticket setup` или `/ticket close`")
+    except Exception as e:
+        await send_error_embed(ctx, str(e))
+
+@bot.hybrid_command(name="ban", description="Забанить пользователя")
+@app_commands.describe(member="Пользователь", reason="Причина", delete_message_days="Удалить сообщения за N дней")
+@commands.has_permissions(ban_members=True)
+async def ban(ctx: commands.Context, member: discord.Member, reason: str = "Не указана", delete_message_days: int = 0):
+    try:
+        if not ctx.author.guild_permissions.ban_members:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+        if is_protected_from_automod(member):
+            return await ctx.send("❌ Нельзя забанить этого пользователя!", ephemeral=True)
+        
+        await member.ban(reason=reason, delete_message_days=delete_message_days)
+        case_id = await create_case(member, ctx.author, "Бан", reason)
+        
+        await send_punishment_log(
+            member=member,
+            punishment_type="🔨 Бан",
+            duration="Навсегда",
+            reason=reason,
+            moderator=ctx.author,
+            case_id=case_id
+        )
         
         embed = discord.Embed(
-            title="✅ Настройки обновлены",
-            description=text,
-            color=COLORS["twitch"]
+            title="🔨 Пользователь забанен",
+            description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}\n**Удалено сообщений за:** {delete_message_days} дней",
+            color=COLORS["mod"]
         )
         await ctx.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        await send_error_embed(ctx, str(e))
+
+@bot.hybrid_command(name="unwarn", description="Удалить предупреждение")
+@app_commands.describe(member="Пользователь", warn_index="Номер предупреждения")
+@commands.has_permissions(manage_messages=True)
+async def unwarn(ctx: commands.Context, member: discord.Member, warn_index: int):
+    try:
+        if not ctx.author.guild_permissions.manage_messages:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+        if is_protected_from_automod(member):
+            return await ctx.send("❌ Нельзя удалять предупреждения этого пользователя!", ephemeral=True)
         
+        user_id = str(member.id)
+        if user_id not in warnings_data or not warnings_data[user_id]:
+            return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
+        
+        if warn_index < 1 or warn_index > len(warnings_data[user_id]):
+            return await ctx.send(f"❌ Неверный номер. Всего: {len(warnings_data[user_id])}", ephemeral=True)
+        
+        removed = warnings_data[user_id].pop(warn_index - 1)
+        if not warnings_data[user_id]:
+            del warnings_data[user_id]
+        save_warnings()
+        
+        await send_mod_log(
+            title="🧹 Предупреждение удалено",
+            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Номер:** {warn_index}\n**Причина:** {removed['reason']}",
+            color=COLORS["mod"]
+        )
+        
+        await ctx.send(f"✅ Предупреждение #{warn_index} для {member.mention} удалено.", ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -3099,7 +3177,7 @@ async def vault(ctx: commands.Context):
             inline=False
         )
         
-        embed.set_footer(text="Экономика v0.1", icon_url=bot.user.display_avatar.url)
+        embed.set_footer(text="Экономика v1.0", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
@@ -3197,6 +3275,8 @@ async def daily(ctx: commands.Context):
         tax = await apply_wealth_tax(user_id)
         roll = random.randint(1, 100)
         
+        # ──────────────── БЕЗОПАСНОЕ ОПРЕДЕЛЕНИЕ РЕДКОСТИ ────────────────
+        # Дефолтные значения — используются, если ничего не найдено
         rarity = "Обычная"
         min_c   = 15
         max_c   = 35
@@ -3204,28 +3284,36 @@ async def daily(ctx: commands.Context):
         emoji   = "🪙"
         bonus   = 0
 
+        # Поиск подходящей редкости
         for r in RARITIES:
-            if roll <= r[1]:
+            if roll <= r[1]:           # r[1] — это шанс (накопительный или прямой)
                 rarity = r[0]
                 min_c  = r[2]
                 max_c  = r[3]
                 color  = r[4]
                 emoji  = r[5]
                 break
+        else:
+            # Сработает, если roll > максимального шанса в RARITIES
+            print(f"Daily warning: roll {roll} не попал ни в одну редкость → дефолт 'Обычная'")
 
+        # Теперь гарантированно есть значения
         reward = random.randint(min_c, max_c)
 
+        # Проверка на стрик (если забирал вчера)
         if last > 0:
             last_date = datetime.fromtimestamp(last, tz=timezone.utc).date()
             today_date = datetime.now(timezone.utc).date()
             if (today_date - last_date).days == 1:
-                bonus = int(reward * 0.1)
+                bonus = int(reward * 0.1)          # 10%
                 reward += bonus
 
+        # Начисляем
         economy_data[user_id]["balance"] += reward
         economy_data[user_id]["last_daily"] = now
         save_economy()
 
+        # ──────────────── Формируем embed ────────────────
         embed = discord.Embed(
             title=f"{emoji} {rarity} награда!",
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
