@@ -3273,22 +3273,28 @@ async def daily(ctx: commands.Context):
         tax = await apply_wealth_tax(user_id)
         roll = random.randint(1, 100)
         
-        # Значения по умолчанию
+        # Определяем переменные ДО цикла
         rarity = "Обычная"
         min_c = 15
         max_c = 35
         color = 0xA8A8A8
         emoji = "🪙"
+        bonus = 0  # Определяем bonus здесь
         
-        # Выбираем редкость
+        # Проходим по всем редкостям
         for r in RARITIES:
-            if roll <= r[1]:
-                rarity, _, min_c, max_c, color, emoji = r
+            if roll <= r[1]:  # r[1] - это шанс выпадения
+                rarity = r[0]  # название
+                min_c = r[2]   # минимум
+                max_c = r[3]   # максимум
+                color = r[4]   # цвет
+                emoji = r[5]   # эмодзи
                 break
         
+        # Генерируем награду
         reward = random.randint(min_c, max_c)
         
-        # Бонус за стрик (если забирает каждый день)
+        # Проверка на стрик (забирал ли вчера)
         if last > 0:
             last_date = datetime.fromtimestamp(last).date()
             today_date = datetime.now().date()
@@ -3296,10 +3302,12 @@ async def daily(ctx: commands.Context):
                 bonus = int(reward * 0.1)
                 reward += bonus
 
+        # Начисляем награду
         economy_data[user_id]["balance"] += reward
         economy_data[user_id]["last_daily"] = now
         save_economy()
 
+        # Создаем embed
         embed = discord.Embed(
             title=f"{emoji} {rarity} награда!",
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
@@ -3308,19 +3316,22 @@ async def daily(ctx: commands.Context):
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         
+        # Добавляем информацию о награде
         embed.add_field(
             name="📊 Детали", 
             value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}-{max_c} {ECONOMY_EMOJIS['coin']}", 
             inline=True
         )
         
-        if bonus:
+        # Бонус за стрик
+        if bonus > 0:
             embed.add_field(
                 name="🔥 Стрик", 
                 value=f"+{format_number(bonus)} (10%)", 
                 inline=True
             )
 
+        # Налог
         if tax > 0:
             embed.add_field(
                 name=f"{ECONOMY_EMOJIS['tax']} Налог", 
@@ -3328,14 +3339,16 @@ async def daily(ctx: commands.Context):
                 inline=False
             )
 
+        # Подвал
         embed.set_footer(
             text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}"
         )
+        
         await ctx.send(embed=embed, ephemeral=True)
 
     except Exception as e:
         await send_error_embed(ctx, str(e))
-        print(f"Ошибка в daily: {e}")
+        print(f"❌ Ошибка в daily: {e}")
         traceback.print_exc()
 
 @bot.hybrid_command(name="top", description="🏆 Топ богачей")
