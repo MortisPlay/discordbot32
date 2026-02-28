@@ -1367,60 +1367,136 @@ async def on_message(message):
         await message.channel.send(f"{message.author.mention}, реклама запрещена!", delete_after=10)
         return
 
-    # Токсичность
+        # Токсичность (улучшенная версия — мат с умом)
     if is_toxic(message.content):
         await message.delete()
 
-        toxic_warnings = [w for w in warnings_data.get(user_id, []) if "токсичность" in w.get("reason", "").lower()]
+        user_id = str(message.author.id)
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-        if len(toxic_warnings) >= 1:
+        # Проверяем, когда было последнее нарушение (защита от спама)
+        last_toxic = None
+        for warn in warnings_data.get(user_id, []):
+            if "токсичность" in warn.get("reason", "").lower():
+                last_toxic = datetime.strptime(warn["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                break
+
+        if last_toxic and (datetime.now(timezone.utc) - last_toxic).total_seconds() < 300:  # 5 минут
+            # Слишком быстро — просто удаляем без варна
+            await message.channel.send(
+                f"{message.author.mention}, без оскорблений, пожалуйста 😅 (слишком быстро)",
+                delete_after=8
+            )
+            return
+
+        # Считаем только свежие нарушения токсичности
+        toxic_count = sum(
+            1 for w in warnings_data.get(user_id, [])
+            if "токсичность" in w.get("reason", "").lower()
+            and (datetime.now(timezone.utc) - datetime.strptime(w["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)).days < 7
+        )
+
+        reason = "Токсичность / личное оскорбление"
+
+        if toxic_count == 0:
+            # Первое нарушение
+            warnings_data.setdefault(user_id, []).append({
+                "moderator": "Автомодерация",
+                "reason": reason,
+                "time": now_str
+            })
+            save_warnings()
+
+            await message.channel.send(
+                f"{message.author.mention}, эй, без оскорблений, ок? 😅\n"
+                f"Это первое предупреждение. Следующее → мут.",
+                delete_after=12
+            )
+
+            case_id = await create_case(
+                message.author, bot.user, "Предупреждение (авто)", reason
+            )
+            await send_punishment_log(
+                member=message.author,
+                punishment_type="⚠️ Предупреждение (авто)",
+                duration="—",
+                reason=reason + " (1-е)",
+                moderator=bot.user,
+                case_id=case_id
+            )
+
+        elif toxic_count == 1:
+            # Второе → мут 30 минут
+            warnings_data.setdefault(user_id, []).append({
+                "moderator": "Автомодерация",
+                "reason": reason,
+                "time": now_str
+            })
+            save_warnings()
+
             try:
-                await message.author.timeout(timedelta(hours=24), reason="Повторная токсичность")
+                await message.author.timeout(timedelta(minutes=30), reason="Повторная токсичность")
                 await message.channel.send(
-                    f"{message.author.mention}, **мут 24 часа** за повторные оскорбления.",
-                    delete_after=10
+                    f"{message.author.mention}, **мут 30 минут** за повторные оскорбления.\n"
+                    f"Третье → мут 2 часа.",
+                    delete_after=15
                 )
-                case_id = await create_case(message.author, bot.user, "Авто-мут 24ч", "Повторная токсичность", "24 часа")
+
+                case_id = await create_case(
+                    message.author, bot.user, "Мут 30 мин (авто)", reason + " (2-е)", "30 минут"
+                )
                 await send_punishment_log(
                     member=message.author,
-                    punishment_type="🔇 Мут 24ч (авто)",
-                    duration="24 часа",
-                    reason="Повторная токсичность",
+                    punishment_type="🔇 Мут 30 мин (авто)",
+                    duration="30 минут",
+                    reason=reason + " (2-е нарушение)",
                     moderator=bot.user,
                     case_id=case_id
                 )
             except:
                 pass
+
         else:
+            # Третье и далее → мут 2 часа + лог
+            warnings_data.setdefault(user_id, []).append({
+                "moderator": "Автомодерация",
+                "reason": reason,
+                "time": now_str
+            })
+            save_warnings()
+
             try:
-                await message.author.timeout(timedelta(hours=1), reason="Токсичность")
+                await message.author.timeout(timedelta(hours=2), reason="Многократная токсичность")
                 await message.channel.send(
-                    f"{message.author.mention}, **мут 1 час** за оскорбления. Повтор → мут 24 часа.",
-                    delete_after=10
+                    f"{message.author.mention}, **мут 2 часа** за многократные оскорбления.",
+                    delete_after=15
                 )
 
-                if user_id not in warnings_data:
-                    warnings_data[user_id] = []
-                warnings_data[user_id].append({
-                    "moderator": "Автомодерация",
-                    "reason": "Токсичность",
-                    "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-                })
-                save_warnings()
-                
-                case_id = await create_case(message.author, bot.user, "Авто-мут 1ч", "Токсичность", "1 час")
+                case_id = await create_case(
+                    message.author, bot.user, "Мут 2ч (авто)", reason + f" ({toxic_count+1}-е)", "2 часа"
+                )
                 await send_punishment_log(
                     member=message.author,
-                    punishment_type="🔇 Мут 1ч (авто)",
-                    duration="1 час",
-                    reason="Токсичность",
+                    punishment_type="🔇 Мут 2ч (авто)",
+                    duration="2 часа",
+                    reason=f"{reason} ({toxic_count+1}-е нарушение)",
                     moderator=bot.user,
                     case_id=case_id
                 )
 
+                # Дополнительный лог модераторам с упоминанием
+                await send_mod_log(
+                    title="⚠️ Многократная токсичность",
+                    description=f"**Пользователь:** {message.author.mention}\n"
+                                f"**Нарушений:** {toxic_count+1}\n"
+                                f"**Последнее сообщение:** удалено\n"
+                                f"**Причина:** {reason}",
+                    color=0xe74c3c
+                )
             except:
-                await message.channel.send(f"{message.author.mention}, удали оскорбления пожалуйста.", delete_after=10)
+                pass
 
+        await check_auto_punishment(message.author, reason)
         return
 
     # Экономика
