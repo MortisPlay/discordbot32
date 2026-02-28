@@ -3273,41 +3273,45 @@ async def daily(ctx: commands.Context):
         tax = await apply_wealth_tax(user_id)
         roll = random.randint(1, 100)
         
-        # Определяем переменные ДО цикла
+        # ──────────────── БЕЗОПАСНОЕ ОПРЕДЕЛЕНИЕ РЕДКОСТИ ────────────────
+        # Дефолтные значения — используются, если ничего не найдено
         rarity = "Обычная"
-        min_c = 15
-        max_c = 35
-        color = 0xA8A8A8
-        emoji = "🪙"
-        bonus = 0  # Определяем bonus здесь
-        
-        # Проходим по всем редкостям
+        min_c   = 15
+        max_c   = 35
+        color   = 0xA8A8A8
+        emoji   = "🪙"
+        bonus   = 0
+
+        # Поиск подходящей редкости
         for r in RARITIES:
-            if roll <= r[1]:  # r[1] - это шанс выпадения
-                rarity = r[0]  # название
-                min_c = r[2]   # минимум
-                max_c = r[3]   # максимум
-                color = r[4]   # цвет
-                emoji = r[5]   # эмодзи
+            if roll <= r[1]:           # r[1] — это шанс (накопительный или прямой)
+                rarity = r[0]
+                min_c  = r[2]
+                max_c  = r[3]
+                color  = r[4]
+                emoji  = r[5]
                 break
-        
-        # Генерируем награду
+        else:
+            # Сработает, если roll > максимального шанса в RARITIES
+            print(f"Daily warning: roll {roll} не попал ни в одну редкость → дефолт 'Обычная'")
+
+        # Теперь гарантированно есть значения
         reward = random.randint(min_c, max_c)
-        
-        # Проверка на стрик (забирал ли вчера)
+
+        # Проверка на стрик (если забирал вчера)
         if last > 0:
-            last_date = datetime.fromtimestamp(last).date()
-            today_date = datetime.now().date()
+            last_date = datetime.fromtimestamp(last, tz=timezone.utc).date()
+            today_date = datetime.now(timezone.utc).date()
             if (today_date - last_date).days == 1:
-                bonus = int(reward * 0.1)
+                bonus = int(reward * 0.1)          # 10%
                 reward += bonus
 
-        # Начисляем награду
+        # Начисляем
         economy_data[user_id]["balance"] += reward
         economy_data[user_id]["last_daily"] = now
         save_economy()
 
-        # Создаем embed
+        # ──────────────── Формируем embed ────────────────
         embed = discord.Embed(
             title=f"{emoji} {rarity} награда!",
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
@@ -3316,14 +3320,12 @@ async def daily(ctx: commands.Context):
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         
-        # Добавляем информацию о награде
         embed.add_field(
             name="📊 Детали", 
-            value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}-{max_c} {ECONOMY_EMOJIS['coin']}", 
+            value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}–{max_c} {ECONOMY_EMOJIS['coin']}", 
             inline=True
         )
         
-        # Бонус за стрик
         if bonus > 0:
             embed.add_field(
                 name="🔥 Стрик", 
@@ -3331,7 +3333,6 @@ async def daily(ctx: commands.Context):
                 inline=True
             )
 
-        # Налог
         if tax > 0:
             embed.add_field(
                 name=f"{ECONOMY_EMOJIS['tax']} Налог", 
@@ -3339,7 +3340,6 @@ async def daily(ctx: commands.Context):
                 inline=False
             )
 
-        # Подвал
         embed.set_footer(
             text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}"
         )
