@@ -1719,31 +1719,76 @@ async def on_message_delete(message):
 
 @bot.event
 async def on_message_edit(before, after):
-    """Лог изменения сообщения"""
-    if before.author.bot or before.content == after.content:
+    """Лог изменения сообщения — улучшенная версия"""
+    if before.author.bot:
         return
-    
+
+    # Пропускаем, если контент не изменился (самый частый случай)
+    if before.content == after.content:
+        return
+
     try:
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if not log_ch:
             return
-        
+
+        # Пытаемся найти, кто отредактировал (через аудит-лог)
+        moderator = None
+        reason = None
+
+        try:
+            async for entry in after.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_update):
+                time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+                if (entry.target.id == after.author.id and
+                    hasattr(entry.extra, 'channel') and
+                    entry.extra.channel.id == after.channel.id and
+                    time_diff < 15):  # увеличил окно до 15 сек
+                    moderator = entry.user
+                    reason = entry.reason
+                    break
+        except discord.Forbidden:
+            print("Нет прав VIEW_AUDIT_LOG — лог редактирования не работает")
+        except Exception as e:
+            print(f"Ошибка при чтении audit_logs в on_message_edit: {e}")
+
         embed = discord.Embed(
             title="✏️ Сообщение изменено",
             color=COLORS["audit"],
             timestamp=datetime.now(timezone.utc)
         )
-        
+
         embed.add_field(name="Автор", value=f"{before.author.mention}\nID: `{before.author.id}`", inline=False)
         embed.add_field(name="Канал", value=before.channel.mention, inline=False)
-        embed.add_field(name="Было", value=before.content[:500] + ("..." if len(before.content) > 500 else "") or "*Пусто*", inline=False)
-        embed.add_field(name="Стало", value=after.content[:500] + ("..." if len(after.content) > 500 else "") or "*Пусто*", inline=False)
+
+        # Контент "Было" / "Стало"
+        before_text = before.content[:500] + ("..." if len(before.content) > 500 else "") or "*Пусто*"
+        after_text  = after.content[:500] + ("..." if len(after.content) > 500 else "") or "*Пусто*"
+
+        embed.add_field(name="Было", value=before_text, inline=False)
+        embed.add_field(name="Стало", value=after_text, inline=False)
+
         embed.add_field(name="Ссылка", value=f"[Перейти]({after.jump_url})", inline=False)
-        
+
+        if moderator:
+            embed.add_field(name="Изменил", value=f"{moderator.mention}\nID: `{moderator.id}`", inline=False)
+        else:
+            embed.add_field(name="Изменил", value="Неизвестно (нет прав на аудит или ручное редактирование)", inline=False)
+
+        if reason:
+            embed.add_field(name="Причина", value=reason, inline=False)
+
+        # Если изменились вложения
+        if before.attachments != after.attachments:
+            att_before = ", ".join([a.filename for a in before.attachments]) or "Нет"
+            att_after  = ", ".join([a.filename for a in after.attachments]) or "Нет"
+            embed.add_field(name="Вложения", value=f"Было: {att_before}\nСтало: {att_after}", inline=False)
+
+        embed.set_footer(text=f"Сообщение ID: {after.id}")
         await log_ch.send(embed=embed)
-        
+
     except Exception as e:
-        print(f"Ошибка в on_message_edit: {e}")
+        print(f"Критическая ошибка в on_message_edit: {e}")
+        traceback.print_exc()
 
 @bot.event
 async def on_member_update(before, after):
