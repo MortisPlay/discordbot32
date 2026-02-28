@@ -2159,24 +2159,6 @@ async def ping(ctx: commands.Context):
             inline=True
         )
         
-        # Системная информация
-        import psutil
-        import platform
-        
-        process = psutil.Process()
-        memory_usage = process.memory_info().rss / 1024 / 1024  # в MB
-        cpu_usage = process.cpu_percent()
-        
-        embed.add_field(
-            name="💻 **Система**",
-            value=f"```yaml\n"
-                  f"Python: {platform.python_version()}\n"
-                  f"Discord.py: {discord.__version__}\n"
-                  f"RAM: {memory_usage:.1f} MB\n"
-                  f"CPU: {cpu_usage}%\n"
-                  f"```",
-            inline=True
-        )
         
         # Статистика команд
         command_count = len(bot.commands)
