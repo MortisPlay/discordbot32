@@ -311,9 +311,10 @@ async def get_twitch_token():
         return None
 
 async def check_twitch_stream(streamer_name: str):
-    """Проверяет, идёт ли стрим у указанного стримера"""
+    """Проверяет, идёт ли стрим у указанного стримера с улучшенной обработкой ошибок"""
     token = await get_twitch_token()
     if not token:
+        print("❌ Не удалось получить токен Twitch")
         return None
     
     try:
@@ -323,41 +324,67 @@ async def check_twitch_stream(streamer_name: str):
         }
         
         async with aiohttp.ClientSession() as session:
-            # Получаем информацию о пользователе
+            # Сначала получаем информацию о пользователе
+            user_url = 'https://api.twitch.tv/helix/users'
             async with session.get(
-                'https://api.twitch.tv/helix/users',
+                user_url,
                 headers=headers,
-                params={'login': streamer_name.lower()}
+                params={'login': streamer_name.lower().strip()}
             ) as resp:
                 if resp.status != 200:
+                    error_text = await resp.text()
+                    print(f"❌ Ошибка Twitch API (users): {resp.status} - {error_text}")
                     return None
+                
                 user_data = await resp.json()
                 
+                # Проверяем, найден ли пользователь
                 if not user_data.get('data'):
-                    return None
+                    print(f"❌ Стример '{streamer_name}' не найден на Twitch")
+                    return {'error': 'not_found', 'streamer': streamer_name}
                 
-                user_id = user_data['data'][0]['id']
-                display_name = user_data['data'][0]['display_name']
-                profile_image = user_data['data'][0].get('profile_image_url')
+                user_info = user_data['data'][0]
+                user_id = user_info['id']
+                display_name = user_info['display_name']
+                profile_image = user_info.get('profile_image_url')
+                offline_image = user_info.get('offline_image_url')
             
-            # Проверяем, идёт ли стрим
+            # Теперь проверяем, идёт ли стрим
+            stream_url = 'https://api.twitch.tv/helix/streams'
             async with session.get(
-                'https://api.twitch.tv/helix/streams',
+                stream_url,
                 headers=headers,
                 params={'user_id': user_id}
             ) as resp:
                 if resp.status != 200:
-                    return None
+                    error_text = await resp.text()
+                    print(f"❌ Ошибка Twitch API (streams): {resp.status} - {error_text}")
+                    return {
+                        'is_live': False,
+                        'display_name': display_name,
+                        'profile_image': profile_image,
+                        'offline_image': offline_image,
+                        'url': f'https://twitch.tv/{streamer_name}',
+                        'error': 'stream_check_failed'
+                    }
+                
                 stream_data = await resp.json()
                 
                 if stream_data.get('data'):
                     stream = stream_data['data'][0]
+                    
+                    # Формируем URL превью (заменяем размеры)
+                    thumbnail = stream['thumbnail_url'].replace('{width}', '1280').replace('{height}', '720')
+                    
+                    # Добавляем timestamp чтобы избежать кэширования
+                    thumbnail = f"{thumbnail}?t={int(datetime.now().timestamp())}"
+                    
                     return {
                         'is_live': True,
                         'title': stream['title'],
                         'game': stream['game_name'],
                         'viewers': stream['viewer_count'],
-                        'thumbnail': stream['thumbnail_url'].replace('{width}', '1280').replace('{height}', '720'),
+                        'thumbnail': thumbnail,
                         'started_at': stream['started_at'],
                         'display_name': display_name,
                         'profile_image': profile_image,
@@ -368,33 +395,76 @@ async def check_twitch_stream(streamer_name: str):
                         'is_live': False,
                         'display_name': display_name,
                         'profile_image': profile_image,
+                        'offline_image': offline_image,
                         'url': f'https://twitch.tv/{streamer_name}'
                     }
+                    
+    except aiohttp.ClientError as e:
+        print(f"❌ Сетевая ошибка при проверке Twitch стрима {streamer_name}: {e}")
+        return {'error': 'network_error', 'streamer': streamer_name}
     except Exception as e:
-        print(f"❌ Ошибка при проверке Twitch стрима {streamer_name}: {e}")
-        return None
+        print(f"❌ Неизвестная ошибка при проверке Twitch стрима {streamer_name}: {e}")
+        traceback.print_exc()
+        return {'error': 'unknown_error', 'streamer': streamer_name}
 
 @tasks.loop(seconds=TWITCH_CHECK_INTERVAL)
 async def check_twitch_streams_task():
-    """Фоновая задача для проверки стримов"""
+    """Фоновая задача для проверки стримов с улучшенной обработкой"""
     if not twitch_subs:
         return
     
-    for streamer_name, data in twitch_subs.items():
+    print(f"🔍 Проверка стримов: {len(twitch_subs)} стримеров")
+    
+    for streamer_name, data in list(twitch_subs.items()):
         try:
-            channel = bot.get_channel(data.get('channel_id', TWITCH_ANNOUNCE_CHANNEL_ID))
+            # Пропускаем если это не наш гильд (для безопасности)
+            guild = bot.get_guild(data.get('guild_id'))
+            if not guild:
+                print(f"⚠️ Гильдия не найдена для стримера {streamer_name}, удаляем")
+                del twitch_subs[streamer_name]
+                save_twitch_subs()
+                continue
+            
+            channel = guild.get_channel(data.get('channel_id'))
             if not channel:
+                print(f"⚠️ Канал не найден для стримера {streamer_name} на гильдии {guild.name}")
+                # Не удаляем, возможно канал временно недоступен
                 continue
             
             result = await check_twitch_stream(streamer_name)
+            
+            # Обрабатываем ошибки
             if not result:
+                print(f"⚠️ Нет ответа от API для {streamer_name}")
+                continue
+                
+            if result.get('error'):
+                if result['error'] == 'not_found':
+                    print(f"⚠️ Стример {streamer_name} больше не существует на Twitch")
+                    # Можно уведомить модераторов
+                    mod_log = bot.get_channel(MOD_LOG_CHANNEL_ID)
+                    if mod_log:
+                        embed = discord.Embed(
+                            title="⚠️ Стример не найден",
+                            description=f"Стример **{streamer_name}** больше не существует на Twitch и будет удалён из списка.",
+                            color=0xFAA61A
+                        )
+                        await mod_log.send(embed=embed)
+                    del twitch_subs[streamer_name]
+                    save_twitch_subs()
                 continue
             
             was_live = data.get('live', False)
             is_live = result['is_live']
             
+            # Обновляем display_name если изменился
+            if result.get('display_name') and result['display_name'] != data.get('display_name'):
+                data['display_name'] = result['display_name']
+            
             # Если стрим только начался
             if is_live and not was_live:
+                print(f"🔴 {result['display_name']} начал стрим!")
+                
                 # Отправляем уведомление
                 embed = discord.Embed(
                     title=f"📺 {result['display_name']} начал стрим!",
@@ -404,13 +474,13 @@ async def check_twitch_streams_task():
                     timestamp=datetime.now(timezone.utc)
                 )
                 
-                embed.add_field(name="🎮 Игра", value=result['game'], inline=True)
+                embed.add_field(name="🎮 Игра", value=result['game'] or "Неизвестно", inline=True)
                 embed.add_field(name="👁️ Зрители", value=format_number(result['viewers']), inline=True)
                 
-                if result['thumbnail']:
-                    embed.set_image(url=result['thumbnail'] + f"?t={int(datetime.now().timestamp())}")
+                if result.get('thumbnail'):
+                    embed.set_image(url=result['thumbnail'])
                 
-                if result['profile_image']:
+                if result.get('profile_image'):
                     embed.set_thumbnail(url=result['profile_image'])
                 
                 embed.set_footer(text="Нажми на заголовок, чтобы перейти к стриму!")
@@ -418,7 +488,7 @@ async def check_twitch_streams_task():
                 # Пингуем роль стримера, если она указана
                 content = None
                 if TWITCH_STREAMER_ROLE_ID:
-                    role = channel.guild.get_role(TWITCH_STREAMER_ROLE_ID)
+                    role = guild.get_role(TWITCH_STREAMER_ROLE_ID)
                     if role:
                         content = role.mention
                 
@@ -429,29 +499,47 @@ async def check_twitch_streams_task():
                 data['live'] = True
                 data['last_stream'] = datetime.now().timestamp()
                 data['last_message_id'] = message.id
+                data['last_check'] = datetime.now().timestamp()
+                
+                # Логируем в мод-канал
+                await send_mod_log(
+                    title="🔴 Стрим начался",
+                    description=f"**Стример:** [{result['display_name']}]({result['url']})\n"
+                               f"**Игра:** {result['game']}\n"
+                               f"**Зрители:** {format_number(result['viewers'])}",
+                    color=COLORS["twitch"]
+                )
                 
             # Если стрим закончился
             elif not is_live and was_live:
+                print(f"⚫ {result['display_name']} закончил стрим")
                 data['live'] = False
+                data['last_check'] = datetime.now().timestamp()
                 
-                # Можно отправить сообщение о завершении
+                # Обновляем предыдущее сообщение
                 if 'last_message_id' in data:
                     try:
                         last_msg = await channel.fetch_message(data['last_message_id'])
-                        if last_msg:
-                            # Добавляем отметку о завершении
+                        if last_msg and last_msg.embeds:
                             new_embed = last_msg.embeds[0]
                             new_embed.color = 0x808080
                             new_embed.set_footer(text="🔴 Стрим завершён")
                             await last_msg.edit(embed=new_embed)
-                    except:
+                    except discord.NotFound:
                         pass
+                    except Exception as e:
+                        print(f"⚠️ Не удалось обновить сообщение: {e}")
+            
+            else:
+                # Просто обновляем время проверки
+                data['last_check'] = datetime.now().timestamp()
             
             # Сохраняем изменения
             save_twitch_subs()
             
         except Exception as e:
             print(f"❌ Ошибка при проверке стримера {streamer_name}: {e}")
+            traceback.print_exc()
 
 # ───────────────────────────────────────────────
 #   ФУНКЦИИ ДЛЯ ПРОВЕРКИ ПРАВ
@@ -2371,6 +2459,62 @@ async def my_investments(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
+@bot.hybrid_command(name="twitchtest", description="🔧 Тест Twitch API (только для админов)")
+@app_commands.describe(streamer="Имя стримера для теста")
+async def twitch_test(ctx: commands.Context, streamer: str):
+    """Тестовая команда для проверки Twitch API"""
+    if ctx.author.id != OWNER_ID:
+        return await ctx.send("❌ Только для разработчика!", ephemeral=True)
+    
+    await ctx.defer(ephemeral=True)
+    
+    embed = discord.Embed(
+        title="🔧 Twitch API Test",
+        description=f"Проверка стримера: **{streamer}**",
+        color=COLORS["twitch"]
+    )
+    
+    # Проверяем наличие переменных
+    if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
+        embed.add_field(
+            name="❌ Конфигурация",
+            value="TWITCH_CLIENT_ID или TWITCH_CLIENT_SECRET не заданы!",
+            inline=False
+        )
+        return await ctx.send(embed=embed, ephemeral=True)
+    
+    embed.add_field(name="Client ID", value=f"`{TWITCH_CLIENT_ID[:10]}...`" if TWITCH_CLIENT_ID else "❌", inline=True)
+    embed.add_field(name="Client Secret", value="✅" if TWITCH_CLIENT_SECRET else "❌", inline=True)
+    
+    # Получаем токен
+    token = await get_twitch_token()
+    if token:
+        embed.add_field(name="Токен", value="✅ Получен", inline=True)
+    else:
+        embed.add_field(name="Токен", value="❌ Не получен", inline=True)
+        await ctx.send(embed=embed, ephemeral=True)
+        return
+    
+    # Проверяем стримера
+    result = await check_twitch_stream(streamer)
+    
+    if result and result.get('error') == 'not_found':
+        embed.add_field(name="Результат", value="❌ Стример не найден", inline=False)
+    elif result and result.get('is_live'):
+        embed.add_field(name="Результат", value="🔴 **LIVE!**", inline=False)
+        embed.add_field(name="Название", value=result['title'][:100], inline=False)
+        embed.add_field(name="Игра", value=result['game'], inline=True)
+        embed.add_field(name="Зрители", value=format_number(result['viewers']), inline=True)
+    elif result:
+        embed.add_field(name="Результат", value="⚫ Офлайн", inline=False)
+    else:
+        embed.add_field(name="Результат", value="❌ Ошибка запроса", inline=False)
+    
+    if result and result.get('display_name'):
+        embed.add_field(name="Отображаемое имя", value=result['display_name'], inline=True)
+    
+    await ctx.send(embed=embed, ephemeral=True)
+
 # ───────────────────────────────────────────────
 #   СИСТЕМА КЕЙСОВ
 # ───────────────────────────────────────────────
@@ -2674,44 +2818,131 @@ async def twitch_add(ctx: commands.Context, streamer: str, channel: discord.Text
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
         if not TWITCH_CLIENT_ID or not TWITCH_CLIENT_SECRET:
-            return await ctx.send("❌ Twitch интеграция не настроена на сервере!", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ Twitch не настроен",
+                description="Администратор не настроил Twitch интеграцию.\n"
+                           "Необходимо добавить переменные окружения:\n"
+                           "`TWITCH_CLIENT_ID` и `TWITCH_CLIENT_SECRET`",
+                color=0xF04747
+            )
+            return await ctx.send(embed=embed, ephemeral=True)
 
-        streamer = streamer.lower()
+        # Отправляем "думаю" сообщение
+        await ctx.defer(ephemeral=True)
+        
+        streamer = streamer.lower().strip()
         channel = channel or ctx.channel
         
         # Проверяем, существует ли такой стример
         result = await check_twitch_stream(streamer)
-        if not result:
-            return await ctx.send(f"❌ Стример **{streamer}** не найден на Twitch!", ephemeral=True)
         
+        # Обрабатываем ошибки
+        if result and result.get('error') == 'not_found':
+            embed = discord.Embed(
+                title="❌ Стример не найден",
+                description=f"Стример **{streamer}** не найден на Twitch!\n\n"
+                           f"**Проверьте:**\n"
+                           f"• Правильно ли написано имя?\n"
+                           f"• Существует ли такой канал?\n"
+                           f"• Попробуйте найти канал на [twitch.tv](https://www.twitch.tv/{streamer})",
+                color=0xF04747
+            )
+            embed.set_footer(text="Имена на Twitch чувствительны к регистру, но мы ищем без учёта регистра")
+            return await ctx.send(embed=embed, ephemeral=True)
+        
+        if result and result.get('error') == 'network_error':
+            embed = discord.Embed(
+                title="❌ Ошибка сети",
+                description=f"Не удалось подключиться к Twitch API. Попробуйте позже.",
+                color=0xF04747
+            )
+            return await ctx.send(embed=embed, ephemeral=True)
+        
+        if not result:
+            embed = discord.Embed(
+                title="❌ Ошибка проверки",
+                description=f"Не удалось проверить стримера **{streamer}**. Возможные причины:\n"
+                           f"• Twitch API временно недоступен\n"
+                           f"• Проблемы с подключением\n"
+                           f"• Неверные Client ID или Secret",
+                color=0xF04747
+            )
+            return await ctx.send(embed=embed, ephemeral=True)
+        
+        # Проверяем, не отслеживаем ли мы уже этого стримера
+        if streamer in twitch_subs:
+            old_data = twitch_subs[streamer]
+            if old_data.get('guild_id') == ctx.guild.id:
+                embed = discord.Embed(
+                    title="⚠️ Уже отслеживается",
+                    description=f"Стример **{result.get('display_name', streamer)}** уже отслеживается!\n"
+                               f"Канал уведомлений: <#{old_data['channel_id']}>",
+                    color=0xFAA61A
+                )
+                return await ctx.send(embed=embed, ephemeral=True)
+            else:
+                # Если стример есть в другом сервере, всё равно можем добавить для этого сервера
+                pass
+        
+        # Сохраняем стримера
         twitch_subs[streamer] = {
             "channel_id": channel.id,
             "guild_id": ctx.guild.id,
             "added_by": ctx.author.id,
             "added_at": datetime.now(timezone.utc).timestamp(),
             "live": False,
-            "display_name": result.get('display_name', streamer)
+            "display_name": result.get('display_name', streamer),
+            "last_check": datetime.now(timezone.utc).timestamp()
         }
         save_twitch_subs()
         
+        # Создаём красивое подтверждение
         embed = discord.Embed(
-            title="✅ Стример добавлен",
-            description=f"**{result.get('display_name', streamer)}** теперь отслеживается!",
+            title="✅ Стример добавлен!",
+            description=f"Теперь я буду отслеживать **{result.get('display_name', streamer)}**",
             color=COLORS["twitch"]
         )
-        embed.add_field(name="📺 Стример", value=result.get('display_name', streamer), inline=True)
-        embed.add_field(name="📢 Канал", value=channel.mention, inline=True)
+        
+        # Добавляем информацию о стримере
+        if result.get('profile_image'):
+            embed.set_thumbnail(url=result['profile_image'])
+        
+        embed.add_field(name="📺 Twitch канал", value=f"[{result.get('display_name', streamer)}](https://twitch.tv/{streamer})", inline=True)
+        embed.add_field(name="📢 Канал уведомлений", value=channel.mention, inline=True)
+        
+        # Проверяем, онлайн ли сейчас стример
+        if result.get('is_live'):
+            embed.add_field(
+                name="🔴 Текущий статус", 
+                value=f"**LIVE!**\n🎮 {result.get('game', 'Неизвестно')}\n👁️ {format_number(result.get('viewers', 0))} зрителей",
+                inline=False
+            )
+        else:
+            embed.add_field(name="⚫ Текущий статус", value="Офлайн", inline=True)
+        
+        embed.set_footer(text=f"Добавил: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
         
         await ctx.send(embed=embed, ephemeral=True)
         
+        # Логируем в мод-канал
         await send_mod_log(
             title="📺 Добавлен стример",
-            description=f"**Стример:** {result.get('display_name', streamer)}\n**Канал:** {channel.mention}\n**Добавил:** {ctx.author.mention}",
+            description=f"**Стример:** [{result.get('display_name', streamer)}](https://twitch.tv/{streamer})\n"
+                       f"**Канал:** {channel.mention}\n"
+                       f"**Добавил:** {ctx.author.mention}",
             color=COLORS["twitch"]
         )
         
     except Exception as e:
-        await send_error_embed(ctx, str(e))
+        print(f"❌ Ошибка в twitch_add: {e}")
+        traceback.print_exc()
+        
+        embed = discord.Embed(
+            title="❌ Непредвиденная ошибка",
+            description=f"Произошла ошибка при добавлении стримера:\n```{str(e)}```",
+            color=0xF04747
+        )
+        await ctx.send(embed=embed, ephemeral=True)
 
 @twitch.command(name="remove", description="Удалить стримера из отслеживания")
 @app_commands.describe(streamer="Имя стримера на Twitch")
