@@ -2469,159 +2469,152 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
         sender_id = str(ctx.author.id)
         receiver_id = str(member.id)
 
-        # Проверка баланса отправителя
+        # Проверка баланса
         if sender_id not in economy_data or economy_data[sender_id].get("balance", 0) < amount:
             bal = economy_data.get(sender_id, {}).get("balance", 0)
             return await ctx.send(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно монет!\nТекущий баланс: **{format_number(bal)}** {ECONOMY_EMOJIS['coin']}",
+                f"{ECONOMY_EMOJIS['error']} Недостаточно монет!\nБаланс: **{format_number(bal)}** {ECONOMY_EMOJIS['coin']}",
                 ephemeral=True
             )
 
-        # Лимит переводов в сутки (5 для обычных, без лимита для VIP)
+        # Лимит переводов (5 в сутки, VIP без лимита)
         now = datetime.now(timezone.utc).timestamp()
         if not is_vip(ctx.author):
-            if "pay_history" not in economy_data[sender_id]:
+            if "pay_history" not in economy_data.setdefault(sender_id, {}):
                 economy_data[sender_id]["pay_history"] = []
-            
-            # Очищаем старые переводы (старше 24 часов)
+
+            # Очистка старых записей
             economy_data[sender_id]["pay_history"] = [
                 t for t in economy_data[sender_id]["pay_history"] if now - t < 86400
             ]
-            
+
             if len(economy_data[sender_id]["pay_history"]) >= 5:
+                next_time = economy_data[sender_id]["pay_history"][0] + 86400
+                remaining = int(next_time - now)
+                hours = remaining // 3600
+                mins = (remaining % 3600) // 60
                 return await ctx.send(
-                    f"{ECONOMY_EMOJIS['error']} Достигнут лимит переводов (5 в сутки).\n"
-                    f"Следующий перевод доступен через {int((86400 - (now - economy_data[sender_id]['pay_history'][0])) // 3600)}ч.",
+                    f"{ECONOMY_EMOJIS['error']} Лимит 5 переводов в сутки.\nСледующий через **{hours}ч {mins}мин**.",
                     ephemeral=True
                 )
 
-        # Комиссия 1% при сумме > 5000
-        transfer_tax = 0
-        if amount > 5000:
-            transfer_tax = max(1, int(amount * 0.01))  # минимум 1 монета
+        # Комиссия 1% при >5000
+        transfer_tax = max(1, int(amount * 0.01)) if amount > 5000 else 0
         final_amount = amount - transfer_tax
 
-        # Подтверждение через кнопку
+        # Класс подтверждения
         class PayConfirm(View):
-            def __init__(self):
+            def __init__(self, author_id: int, original_message_id: int):
                 super().__init__(timeout=90)
+                self.author_id = author_id
+                self.original_message_id = original_message_id
 
             @discord.ui.button(label="Подтвердить перевод", style=discord.ButtonStyle.green, emoji="💸")
             async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-                if interaction.user.id != ctx.author.id:
+                if interaction.user.id != self.author_id:
                     return await interaction.response.send_message("Это не твоя команда!", ephemeral=True)
 
-                # Списываем и начисляем
-                economy_data[sender_id]["balance"] -= amount
-                if receiver_id not in economy_data:
-                    economy_data[receiver_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
-                economy_data[receiver_id]["balance"] += final_amount
-
-                # Налог в казну сервера
-                if transfer_tax > 0:
-                    economy_data["server_vault"] = economy_data.get("server_vault", 0) + transfer_tax
-
-                # Записываем время перевода (для лимита)
-                if "pay_history" not in economy_data[sender_id]:
-                    economy_data[sender_id]["pay_history"] = []
-                economy_data[sender_id]["pay_history"].append(now)
-                
-                save_economy()
-
-                # Успешный embed
-                success_embed = discord.Embed(
-                    title=f"{ECONOMY_EMOJIS['gift']} Подарок доставлен! 🎁",
-                    description=f"**{ctx.author.mention}** отправил подарок **{member.mention}**!",
-                    color=0x2ecc71,  # яркий зелёный
-                    timestamp=datetime.now(timezone.utc)
-                )
-                success_embed.add_field(
-                    name="Сумма",
-                    value=f"**{format_number(final_amount)}** {ECONOMY_EMOJIS['coin']}",
-                    inline=True
-                )
-                if transfer_tax > 0:
-                    success_embed.add_field(
-                        name=f"{ECONOMY_EMOJIS['tax']} Комиссия",
-                        value=f"-{format_number(transfer_tax)} {ECONOMY_EMOJIS['coin']} (1%)",
-                        inline=True
-                    )
-                success_embed.add_field(
-                    name="Отправитель после перевода",
-                    value=f"**{format_number(economy_data[sender_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
-                    inline=False
-                )
-                success_embed.add_field(
-                    name="Получатель после перевода",
-                    value=f"**{format_number(economy_data[receiver_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
-                    inline=False
-                )
-                if comment:
-                    success_embed.add_field(name="📝 Сообщение", value=f"*{comment}*", inline=False)
-
-                success_embed.set_thumbnail(url="https://media.giphy.com/media/l0HlRnAWXxn0MhKLK/giphy.gif")  # гифка подарка
-                success_embed.set_footer(
-                    text=f"MortisPlay Экономика • Перевод #{len(economy_data[sender_id].get('pay_history', []))}",
-                    icon_url=ctx.author.display_avatar.url
-                )
-
-                await interaction.message.edit(embed=success_embed, view=None)
-
-                # Уведомление получателю в ЛС
                 try:
-                    dm_embed = discord.Embed(
-                        title=f"{ECONOMY_EMOJIS['gift']} Вам прислали подарок!",
-                        description=f"**От:** {ctx.author.mention}\n**Сумма:** {format_number(final_amount)} {ECONOMY_EMOJIS['coin']}",
-                        color=0x2ecc71
+                    # Списываем и начисляем
+                    economy_data[sender_id]["balance"] -= amount
+                    if receiver_id not in economy_data:
+                        economy_data[receiver_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+                    economy_data[receiver_id]["balance"] += final_amount
+
+                    # Налог в казну
+                    if transfer_tax > 0:
+                        economy_data["server_vault"] = economy_data.get("server_vault", 0) + transfer_tax
+
+                    # История переводов
+                    if "pay_history" not in economy_data[sender_id]:
+                        economy_data[sender_id]["pay_history"] = []
+                    economy_data[sender_id]["pay_history"].append(now)
+                    
+                    save_economy()
+
+                    # Успешный эмбед
+                    success_embed = discord.Embed(
+                        title=f"{ECONOMY_EMOJIS['gift']} Подарок доставлен! 🎁",
+                        description=f"**{interaction.user.mention}** → **{member.mention}**",
+                        color=0x2ecc71,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    success_embed.add_field(name="Сумма", value=f"**{format_number(final_amount)}** {ECONOMY_EMOJIS['coin']}", inline=True)
+                    if transfer_tax > 0:
+                        success_embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Комиссия", value=f"-{format_number(transfer_tax)} (1%)", inline=True)
+                    success_embed.add_field(
+                        name="Баланс отправителя",
+                        value=f"**{format_number(economy_data[sender_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
+                        inline=False
+                    )
+                    success_embed.add_field(
+                        name="Баланс получателя",
+                        value=f"**{format_number(economy_data[receiver_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
+                        inline=False
                     )
                     if comment:
-                        dm_embed.add_field(name="Сообщение от отправителя", value=comment, inline=False)
-                    dm_embed.set_footer(text="MortisPlay • Экономика")
-                    await member.send(embed=dm_embed)
-                except:
-                    pass  # если ЛС закрыты — просто молчим
+                        success_embed.add_field(name="📝 Сообщение", value=f"*{comment}*", inline=False)
 
-                # Лог крупного перевода (> 10к)
-                if amount >= 10000:
-                    await send_mod_log(
-                        title="💰 Огромный подарок!",
-                        description=f"**Отправитель:** {ctx.author.mention}\n**Получатель:** {member.mention}\n**Сумма:** {format_number(amount)} → **{format_number(final_amount)}** (комиссия {transfer_tax})",
-                        color=0xffd700
+                    success_embed.set_thumbnail(url="https://media.giphy.com/media/l0HlRnAWXxn0MhKLK/giphy.gif")
+                    success_embed.set_footer(text=f"MortisPlay • Перевод #{len(economy_data[sender_id]['pay_history'])}")
+
+                    await interaction.message.edit(embed=success_embed, view=None)
+
+                    # ЛС получателю
+                    try:
+                        dm = discord.Embed(
+                            title=f"{ECONOMY_EMOJIS['gift']} Вам прислали подарок!",
+                            description=f"От: {interaction.user.mention}\nСумма: **{format_number(final_amount)}** {ECONOMY_EMOJIS['coin']}",
+                            color=0x2ecc71
+                        )
+                        if comment:
+                            dm.add_field(name="Сообщение", value=comment, inline=False)
+                        await member.send(embed=dm)
+                    except:
+                        pass
+
+                    # Лог крупного перевода
+                    if amount >= 10000:
+                        await send_mod_log(
+                            title="💰 Крупный перевод!",
+                            description=f"**От:** {interaction.user.mention}\n**Кому:** {member.mention}\n**Сумма:** {format_number(amount)} → {format_number(final_amount)}",
+                            color=0xffd700
+                        )
+
+                except Exception as inner_e:
+                    error_embed = discord.Embed(
+                        title=f"{ECONOMY_EMOJIS['error']} Ошибка при выполнении перевода",
+                        description=str(inner_e),
+                        color=0xe74c3c
                     )
+                    await interaction.message.edit(embed=error_embed, view=None)
 
             @discord.ui.button(label="Отмена", style=discord.ButtonStyle.red, emoji="✖️")
             async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-                if interaction.user.id != ctx.author.id:
+                if interaction.user.id != self.author_id:
                     return
                 await interaction.message.edit(content=f"{ECONOMY_EMOJIS['error']} Перевод отменён.", embed=None, view=None)
 
-        # Предпросмотр перевода
+        # Создаём предпросмотр
         preview_embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['transfer']} Подтвердите перевод",
-            description=f"Вы собираетесь отправить **{format_number(amount)}** {ECONOMY_EMOJIS['coin']} → {member.mention}",
-            color=0x3498db,  # яркий синий
+            description=f"**{format_number(amount)}** {ECONOMY_EMOJIS['coin']} → {member.mention}",
+            color=0x3498db,
             timestamp=datetime.now(timezone.utc)
         )
         if transfer_tax > 0:
-            preview_embed.add_field(
-                name=f"{ECONOMY_EMOJIS['tax']} Комиссия",
-                value=f"{format_number(transfer_tax)} {ECONOMY_EMOJIS['coin']} (1% при >5000)",
-                inline=False
-            )
+            preview_embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Комиссия", value=f"{format_number(transfer_tax)} (1%)", inline=False)
+        preview_embed.add_field(name="Получатель получит", value=f"**{format_number(final_amount)}** {ECONOMY_EMOJIS['coin']}", inline=False)
         if comment:
-            preview_embed.add_field(name="Сообщение получателю", value=f"*{comment}*", inline=False)
-        preview_embed.add_field(
-            name="Получит получатель",
-            value=f"**{format_number(final_amount)}** {ECONOMY_EMOJIS['coin']}",
-            inline=False
-        )
-        preview_embed.set_footer(text="Подтвердите в течение 90 секунд • Лимит: 5 переводов/сутки (VIP — без лимита)")
+            preview_embed.add_field(name="Сообщение", value=f"*{comment}*", inline=False)
+        preview_embed.set_footer(text="Действие в течение 90 секунд • Лимит: 5/сутки (VIP — без лимита)")
 
-        view = PayConfirm()
+        # Отправляем с View
+        view = PayConfirm(author_id=ctx.author.id, original_message_id=ctx.message.id if ctx.message else None)
         await ctx.send(embed=preview_embed, view=view, ephemeral=True)
 
     except Exception as e:
-        await send_error_embed(ctx, f"Ошибка при переводе: {str(e)}")
+        await send_error_embed(ctx, f"Ошибка при подготовке перевода: {str(e)}")
 
 @bot.hybrid_command(name="invest", description="📈 Инвестировать монеты")
 @app_commands.describe(amount="Сумма", days="Количество дней (1-30)")
