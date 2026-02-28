@@ -2124,7 +2124,7 @@ async def ping(ctx: commands.Context):
         channel_count = sum(len(g.channels) for g in bot.guilds)
         
         # Пинг в разных регионах (эмуляция)
-        ping_status = "🟢 Отлично" if latency < 100 else "🟡 Средне" if latency < 200 else "🔴 Плохо"
+        ping_status = "🟢 Отлично" if latency < 200 else "🟡 Средне" if latency < 300 else "🔴 Плохо"
         
         # Создаем красивый embed
         embed = discord.Embed(
@@ -2158,7 +2158,6 @@ async def ping(ctx: commands.Context):
                   f"```",
             inline=True
         )
-        
         
         # Статистика команд
         command_count = len(bot.commands)
@@ -2205,7 +2204,7 @@ async def ping(ctx: commands.Context):
             else:
                 new_uptime_str = f"{new_seconds}с"
             
-            new_ping_status = "🟢 Отлично" if new_latency < 100 else "🟡 Средне" if new_latency < 200 else "🔴 Плохо"
+            new_ping_status = "🟢 Отлично" if new_latency < 200 else "🟡 Средне" if new_latency < 300 else "🔴 Плохо"
             
             new_embed = discord.Embed(
                 title="🏓 **ПОНГ!**",
@@ -2237,16 +2236,12 @@ async def ping(ctx: commands.Context):
                 inline=True
             )
             
-            new_memory = process.memory_info().rss / 1024 / 1024
-            new_cpu = process.cpu_percent()
-            
             new_embed.add_field(
-                name="💻 **Система**",
-                value=f"```yaml\n"
-                      f"Python: {platform.python_version()}\n"
-                      f"Discord.py: {discord.__version__}\n"
-                      f"RAM: {new_memory:.1f} MB\n"
-                      f"CPU: {new_cpu}%\n"
+                name="📋 **Команды**",
+                value=f"```css\n"
+                      f"Всего: {command_count}\n"
+                      f"Гибридных: {hybrid_count}\n"
+                      f"Слэш: {command_count}\n"
                       f"```",
                 inline=True
             )
