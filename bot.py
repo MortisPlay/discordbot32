@@ -2483,7 +2483,6 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
             if "pay_history" not in economy_data.setdefault(sender_id, {}):
                 economy_data[sender_id]["pay_history"] = []
 
-            # Очистка старых записей
             economy_data[sender_id]["pay_history"] = [
                 t for t in economy_data[sender_id]["pay_history"] if now - t < 86400
             ]
@@ -2502,34 +2501,30 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
         transfer_tax = max(1, int(amount * 0.01)) if amount > 5000 else 0
         final_amount = amount - transfer_tax
 
-        # Класс подтверждения
         class PayConfirm(View):
-            def __init__(self, author_id: int, original_message_id: int):
-                super().__init__(timeout=90)
+            def __init__(self, author_id: int):
+                super().__init__(timeout=120)  # увеличил до 120 сек для надёжности
                 self.author_id = author_id
-                self.original_message_id = original_message_id
 
             @discord.ui.button(label="Подтвердить перевод", style=discord.ButtonStyle.green, emoji="💸")
             async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
                 if interaction.user.id != self.author_id:
                     return await interaction.response.send_message("Это не твоя команда!", ephemeral=True)
 
+                await interaction.response.defer(ephemeral=False)  # важно!
+
                 try:
-                    # Списываем и начисляем
+                    # Списание и начисление
                     economy_data[sender_id]["balance"] -= amount
                     if receiver_id not in economy_data:
                         economy_data[receiver_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
                     economy_data[receiver_id]["balance"] += final_amount
 
-                    # Налог в казну
                     if transfer_tax > 0:
                         economy_data["server_vault"] = economy_data.get("server_vault", 0) + transfer_tax
 
-                    # История переводов
-                    if "pay_history" not in economy_data[sender_id]:
-                        economy_data[sender_id]["pay_history"] = []
-                    economy_data[sender_id]["pay_history"].append(now)
-                    
+                    # История
+                    economy_data[sender_id].setdefault("pay_history", []).append(now)
                     save_economy()
 
                     # Успешный эмбед
@@ -2543,14 +2538,10 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
                     if transfer_tax > 0:
                         success_embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Комиссия", value=f"-{format_number(transfer_tax)} (1%)", inline=True)
                     success_embed.add_field(
-                        name="Баланс отправителя",
-                        value=f"**{format_number(economy_data[sender_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
-                        inline=False
+                        name="Баланс отправителя", value=f"**{format_number(economy_data[sender_id]['balance'])}** {ECONOMY_EMOJIS['coin']}", inline=False
                     )
                     success_embed.add_field(
-                        name="Баланс получателя",
-                        value=f"**{format_number(economy_data[receiver_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
-                        inline=False
+                        name="Баланс получателя", value=f"**{format_number(economy_data[receiver_id]['balance'])}** {ECONOMY_EMOJIS['coin']}", inline=False
                     )
                     if comment:
                         success_embed.add_field(name="📝 Сообщение", value=f"*{comment}*", inline=False)
@@ -2558,7 +2549,14 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
                     success_embed.set_thumbnail(url="https://media.giphy.com/media/l0HlRnAWXxn0MhKLK/giphy.gif")
                     success_embed.set_footer(text=f"MortisPlay • Перевод #{len(economy_data[sender_id]['pay_history'])}")
 
-                    await interaction.message.edit(embed=success_embed, view=None)
+                    # Отправляем новое сообщение вместо редактирования
+                    await interaction.followup.send(embed=success_embed)
+
+                    # Автоудаление оригинального сообщения предпросмотра
+                    try:
+                        await interaction.message.delete(delay=5)
+                    except:
+                        pass
 
                     # ЛС получателю
                     try:
@@ -2573,7 +2571,7 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
                     except:
                         pass
 
-                    # Лог крупного перевода
+                    # Лог крупного
                     if amount >= 10000:
                         await send_mod_log(
                             title="💰 Крупный перевод!",
@@ -2583,19 +2581,32 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
 
                 except Exception as inner_e:
                     error_embed = discord.Embed(
-                        title=f"{ECONOMY_EMOJIS['error']} Ошибка при выполнении перевода",
+                        title=f"{ECONOMY_EMOJIS['error']} Ошибка при переводе",
                         description=str(inner_e),
                         color=0xe74c3c
                     )
-                    await interaction.message.edit(embed=error_embed, view=None)
+                    await interaction.followup.send(embed=error_embed, ephemeral=True)
 
             @discord.ui.button(label="Отмена", style=discord.ButtonStyle.red, emoji="✖️")
             async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
                 if interaction.user.id != self.author_id:
-                    return
-                await interaction.message.edit(content=f"{ECONOMY_EMOJIS['error']} Перевод отменён.", embed=None, view=None)
+                    return await interaction.response.send_message("Это не твоя команда!", ephemeral=True)
 
-        # Создаём предпросмотр
+                await interaction.response.defer(ephemeral=False)
+
+                cancel_embed = discord.Embed(
+                    title=f"{ECONOMY_EMOJIS['error']} Перевод отменён",
+                    color=0xe74c3c,
+                    timestamp=datetime.now(timezone.utc)
+                )
+                await interaction.followup.send(embed=cancel_embed)
+
+                try:
+                    await interaction.message.delete(delay=3)
+                except:
+                    pass
+
+        # Предпросмотр (теперь обычное сообщение)
         preview_embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['transfer']} Подтвердите перевод",
             description=f"**{format_number(amount)}** {ECONOMY_EMOJIS['coin']} → {member.mention}",
@@ -2607,11 +2618,10 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
         preview_embed.add_field(name="Получатель получит", value=f"**{format_number(final_amount)}** {ECONOMY_EMOJIS['coin']}", inline=False)
         if comment:
             preview_embed.add_field(name="Сообщение", value=f"*{comment}*", inline=False)
-        preview_embed.set_footer(text="Действие в течение 90 секунд • Лимит: 5/сутки (VIP — без лимита)")
+        preview_embed.set_footer(text="Действие в течение 120 секунд • Лимит: 5/сутки (VIP — без лимита)")
 
-        # Отправляем с View
-        view = PayConfirm(author_id=ctx.author.id, original_message_id=ctx.message.id if ctx.message else None)
-        await ctx.send(embed=preview_embed, view=view, ephemeral=True)
+        view = PayConfirm(author_id=ctx.author.id)
+        await ctx.send(embed=preview_embed, view=view)  # БЕЗ ephemeral=True !
 
     except Exception as e:
         await send_error_embed(ctx, f"Ошибка при подготовке перевода: {str(e)}")
