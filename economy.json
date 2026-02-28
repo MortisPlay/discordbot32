@@ -1,0 +1,48 @@
+{
+  "765476979792150549": {
+    "balance": 783,
+    "last_daily": 1772244572.17099,
+    "last_message": 0,
+    "investments": [
+      {
+        "amount": 1000,
+        "days": 7,
+        "profit": 61,
+        "start_time": 1771973977.190449,
+        "end_time": 1772578777.190449,
+        "rate": 6.17
+      }
+    ]
+  },
+  "696486192778182716": {
+    "balance": 1000,
+    "last_daily": 0,
+    "last_message": 0,
+    "investments": []
+  },
+  "server_vault": 3295,
+  "1191348523900350566": {
+    "balance": 5000,
+    "last_daily": 0,
+    "last_message": 0,
+    "investments": []
+  },
+  "1401355255912071238": {
+    "balance": 89200,
+    "last_daily": 0,
+    "last_message": 0,
+    "investments": []
+  },
+  "1034765820464746576": {
+    "balance": 5,
+    "last_daily": 0,
+    "last_message": 1771959870.812349,
+    "investments": []
+  },
+  "1151691075732381807": {
+    "balance": 0,
+    "last_daily": 0,
+    "last_message": 0,
+    "investments": []
+  }
+}
