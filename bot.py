@@ -1,5 +1,3 @@
-О! А давай добавим интеграцию Twitch к боту. Когда стример будет запускать стрим то бот перешлёт это на канал и ссылку на стрим.
-Вот код, держи:
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
