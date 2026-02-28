@@ -2491,7 +2491,7 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
         if tax > 0:
             embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']} (1% > 10к)", inline=False)
 
-        embed.set_footer(text="Экономика v1.0", icon_url=bot.user.display_avatar.url)
+        embed.set_footer(text="Экономика v0.1.7", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
         
         try:
@@ -3213,7 +3213,7 @@ async def vault(ctx: commands.Context):
             inline=False
         )
         
-        embed.set_footer(text="Экономика v1.0", icon_url=bot.user.display_avatar.url)
+        embed.set_footer(text="Экономика v0.1.7", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
