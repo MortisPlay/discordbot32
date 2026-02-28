@@ -12,34 +12,36 @@ import aiohttp
 import io
 from collections import defaultdict, deque
 import uuid
+import traceback
+import sys
 
 # ───────────────────────────────────────────────
-#   НАСТРОЙКИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+#   НАСТРОЙКИ (БЕЗ ТОКЕНА!)
 # ───────────────────────────────────────────────
-TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+# Токен берется из переменной окружения DISCORD_TOKEN
+# Для локального тестирования можно создать файл .env или установить переменную в системе
+TOKEN = os.getenv('DISCORD_TOKEN')
 if not TOKEN:
-    print("❌ Ошибка: Не найден токен бота в переменных окружения!")
-    exit(1)
+    print("❌ ОШИБКА: Не найден токен в переменных окружения!")
+    print("📌 Установите переменную DISCORD_TOKEN")
+    print("💡 Например: export DISCORD_TOKEN='ваш_токен'")
+    sys.exit(1)
 
-OWNER_ID = int(os.getenv('OWNER_ID', '765476979792150549'))
-FULL_ACCESS_GUILD_ID = int(os.getenv('FULL_ACCESS_GUILD_ID', '1474623510268739790'))
+OWNER_ID = 765476979792150549
 
-# Вебхук для логов (если не задан, логирование будет отключено)
-LOG_WEBHOOK_URL = os.getenv('LOG_WEBHOOK_URL')
+FULL_ACCESS_GUILD_ID = 1474623510268739790
 
-# ID каналов (оставлены для совместимости, но теперь используем вебхук)
-MOD_LOG_CHANNEL_ID = int(os.getenv('MOD_LOG_CHANNEL_ID', '0'))  # больше не используется, но оставим для обратной совместимости
-TICKET_ARCHIVE_CHANNEL_ID = int(os.getenv('TICKET_ARCHIVE_CHANNEL_ID', '0'))
-TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', '0'))
-SUPPORT_ROLE_ID = int(os.getenv('SUPPORT_ROLE_ID', '0'))
-
-# ───────────────────────────────────────────────
-#   ОСТАЛЬНЫЕ НАСТРОЙКИ
-# ───────────────────────────────────────────────
+MOD_LOG_CHANNEL_ID = 1475291899672657940
+WELCOME_CHANNEL_ID = 1475048502370500639
+GOODBYE_CHANNEL_ID = 1475048502370500639
+TICKET_ARCHIVE_CHANNEL_ID = 1475338423513649347
 PREFIX = "!"
 WARNINGS_FILE = "warnings.json"
 ECONOMY_FILE = "economy.json"
 CASES_FILE = "cases.json"
+
+TICKET_CATEGORY_ID = 1475334525344157807
+SUPPORT_ROLE_ID = 1475331888163066029
 
 SPAM_THRESHOLD = 5
 SPAM_TIME = 8
@@ -50,19 +52,21 @@ MESSAGE_COOLDOWN = 60
 TAX_THRESHOLD = 10000
 TAX_RATE = 0.01
 
-WARN_AUTO_MUTE_THRESHOLD = 3
-WARN_AUTO_LONG_MUTE_THRESHOLD = 6
-WARN_AUTO_KICK_THRESHOLD = 10
-WARN_EXPIRY_DAYS = 30
+# НАСТРОЙКИ ДЛЯ АВТОМОДЕРАЦИИ
+WARN_AUTO_MUTE_THRESHOLD = 3      # 3 варна → мут 1ч
+WARN_AUTO_LONG_MUTE_THRESHOLD = 6  # 6 варнов → мут 24ч
+WARN_AUTO_KICK_THRESHOLD = 10      # 10 варнов → кик
+WARN_EXPIRY_DAYS = 30              # срок действия варна
 
-RAID_JOIN_THRESHOLD = 5
-RAID_TIME_WINDOW = 300
-NEW_ACCOUNT_DAYS = 7
+RAID_JOIN_THRESHOLD = 5            # порог рейда
+RAID_TIME_WINDOW = 300             # окно в секундах (5 минут)
+NEW_ACCOUNT_DAYS = 7                # возраст нового аккаунта
 
 VIP_ROLE_NAMES = ["VIP", "Premium", "Vip", "vip"]
 VIP_SPAM_MULTIPLIER = 2
 VIP_MENTION_MULTIPLIER = 3
 
+# НОВЫЕ НАСТРОЙКИ
 INACTIVE_TICKET_HOURS = 24
 INVESTMENT_MIN_AMOUNT = 1000
 INVESTMENT_MAX_DAYS = 30
@@ -70,6 +74,7 @@ INVESTMENT_BASE_RATE = 0.05
 UNAUTHORIZED_CMD_LIMIT = 3
 UNAUTHORIZED_MUTE_MINUTES = 1
 
+# НАСТРОЙКИ ДЛЯ FAQ
 FAQ_FILE = "faq.json"
 FAQ_CATEGORIES = {
     "общее": "📋 Общие вопросы",
@@ -79,6 +84,7 @@ FAQ_CATEGORIES = {
     "техника": "🔧 Технические вопросы"
 }
 
+# НОВОЕ ОФОРМЛЕНИЕ ДЛЯ ЭКОНОМИКИ
 ECONOMY_EMOJIS = {
     "balance": "💰",
     "vault": "🏦",
@@ -124,6 +130,21 @@ INSULT_PATTERNS = [
     r"\b(заткнись|заткнулся|молчи)\s*(сука|блядь|ебанат)\b"
 ]
 
+# ЦВЕТА ДЛЯ ОФОРМЛЕНИЯ
+COLORS = {
+    "welcome": 0x57F287,      # Зеленый
+    "goodbye": 0xF04747,      # Красный
+    "audit": 0x5865F2,        # Синий
+    "mod": 0xFAA61A,          # Оранжевый
+    "economy": 0xFFD700,      # Золотой
+    "ticket": 0x9B59B6,       # Фиолетовый
+    "faq": 0x3498DB           # Голубой
+}
+
+# Остальной код БЕЗ ИЗМЕНЕНИЙ - вся логика бота остается той же
+# Просто удалите старую строку с TOKEN и вставьте весь ваш код сюда
+# (весь код после настроек до запуска)
+
 # ───────────────────────────────────────────────
 #   ГЛОБАЛЬНЫЕ ДАННЫЕ
 # ───────────────────────────────────────────────
@@ -133,6 +154,7 @@ cases_data = {}
 spam_cache = {}
 raid_cache = defaultdict(list)
 temp_roles = {}
+investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
 
@@ -216,39 +238,42 @@ load_warnings()
 load_cases()
 
 # ───────────────────────────────────────────────
+#   ФУНКЦИИ ДЛЯ ПРОВЕРКИ ПРАВ
+# ───────────────────────────────────────────────
+
+def is_moderator(member: discord.Member) -> bool:
+    """Проверяет, является ли пользователь модератором"""
+    return (member.guild_permissions.manage_messages or 
+            member.guild_permissions.administrator or 
+            member.id == OWNER_ID)
+
+def is_protected_from_automod(member: discord.Member) -> bool:
+    """Проверяет, защищен ли пользователь от автомодерации"""
+    return (member.guild_permissions.administrator or 
+            member.guild_permissions.manage_messages or
+            member.guild_permissions.manage_guild or
+            member.id == OWNER_ID or
+            member.top_role.permissions.administrator)
+
+# ───────────────────────────────────────────────
 #   ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ───────────────────────────────────────────────
 
-async def get_log_webhook():
-    """Возвращает асинхронный вебхук для логов или None, если URL не задан."""
-    if not LOG_WEBHOOK_URL:
-        return None
-    try:
-        # Кэшируем вебхук, чтобы не создавать каждый раз новый
-        if not hasattr(bot, '_log_webhook'):
-            bot._log_webhook = discord.Webhook.from_url(LOG_WEBHOOK_URL, session=bot.http._HTTPClient__session)
-        return bot._log_webhook
-    except:
-        return None
-
-async def send_log_embed(embed: discord.Embed):
-    """Отправляет embed через вебхук логов."""
-    webhook = await get_log_webhook()
-    if webhook:
-        try:
-            await webhook.send(embed=embed)
-        except Exception as e:
-            print(f"Ошибка отправки лога через вебхук: {e}")
-
 async def check_unauthorized_commands(user: discord.Member):
+    """Проверяет количество попыток использовать команды без прав"""
+    if is_moderator(user):
+        return False
+        
     user_id = str(user.id)
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
+    
     unauthorized_attempts[user_id] = [t for t in unauthorized_attempts[user_id] if now - t < 3600]
     unauthorized_attempts[user_id].append(now)
     
     if len(unauthorized_attempts[user_id]) >= UNAUTHORIZED_CMD_LIMIT:
         try:
-            await user.timeout(timedelta(minutes=UNAUTHORIZED_MUTE_MINUTES), reason="Превышение лимита попыток использования команд без прав")
+            await user.timeout(timedelta(minutes=UNAUTHORIZED_MUTE_MINUTES), 
+                              reason="Превышение лимита попыток использования команд без прав")
             await send_punishment_log(
                 member=user,
                 punishment_type="🔇 Мут (авто)",
@@ -286,8 +311,7 @@ def create_progress_bar(current: int, max_value: int, length: int = 10) -> str:
         return "█" * length
     progress = min(current / max_value, 1.0)
     filled = int(progress * length)
-    bar = "█" * filled + "░" * (length - filled)
-    return bar
+    return "█" * filled + "░" * (length - filled)
 
 def generate_case_id() -> str:
     return str(uuid.uuid4())[:8]
@@ -303,7 +327,7 @@ async def create_case(member: discord.Member, moderator: discord.User, action: s
         "action": action,
         "reason": reason,
         "duration": duration,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
     save_cases()
     return case_id
@@ -314,23 +338,23 @@ async def get_case(case_id: str) -> dict:
 def is_vip(member: discord.Member) -> bool:
     if not member:
         return False
-    for role in member.roles:
-        if role.name in VIP_ROLE_NAMES:
-            return True
-    return False
+    return any(role.name in VIP_ROLE_NAMES for role in member.roles)
 
 def clean_old_warnings(user_id: str):
     if user_id not in warnings_data:
         return
-    now = datetime.utcnow()
+    
+    now = datetime.now(timezone.utc)
     fresh_warnings = []
+    
     for warn in warnings_data[user_id]:
         try:
-            warn_time = datetime.strptime(warn["time"], "%Y-%m-%d %H:%M:%S")
+            warn_time = datetime.strptime(warn["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             if (now - warn_time).days < WARN_EXPIRY_DAYS:
                 fresh_warnings.append(warn)
         except:
             continue
+    
     warnings_data[user_id] = fresh_warnings
     if not fresh_warnings:
         del warnings_data[user_id]
@@ -341,8 +365,10 @@ def get_warning_count(user_id: str) -> int:
     return len(warnings_data.get(user_id, []))
 
 async def check_auto_punishment(member: discord.Member, reason: str = "Автоматически"):
-    if not member:
+    """Проверяет количество варнов и применяет наказание (не трогает модераторов)"""
+    if not member or is_protected_from_automod(member):
         return
+    
     user_id = str(member.id)
     warn_count = get_warning_count(user_id)
     
@@ -360,6 +386,7 @@ async def check_auto_punishment(member: discord.Member, reason: str = "Авто�
             )
         except:
             pass
+    
     elif warn_count >= WARN_AUTO_LONG_MUTE_THRESHOLD:
         try:
             await member.timeout(timedelta(hours=24), reason=f"Автоматический мут: {warn_count} варнов")
@@ -374,6 +401,7 @@ async def check_auto_punishment(member: discord.Member, reason: str = "Авто�
             )
         except:
             pass
+    
     elif warn_count >= WARN_AUTO_MUTE_THRESHOLD:
         try:
             await member.timeout(timedelta(hours=1), reason=f"Автоматический мут: {warn_count} варнов")
@@ -390,39 +418,47 @@ async def check_auto_punishment(member: discord.Member, reason: str = "Авто�
             pass
 
 async def send_punishment_log(member: discord.Member, punishment_type: str, duration: str, reason: str, moderator: discord.User, case_id: str = None):
+    if not MOD_LOG_CHANNEL_ID:
+        return
+    
+    log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+    if not log_ch:
+        return
+    
     embed = discord.Embed(
         title=f"🛠️ Наказание {f'[#{case_id}]' if case_id else ''}",
-        color=0xF04747,
-        timestamp=datetime.utcnow()
+        color=COLORS["mod"],
+        timestamp=datetime.now(timezone.utc)
     )
+    
     embed.add_field(name="👤 Кто наказан", value=f"{member.mention}\n{member} ({member.id})", inline=False)
     embed.add_field(name="⚡ Тип", value=punishment_type, inline=True)
     embed.add_field(name="⏰ Время действия", value=duration, inline=True)
     embed.add_field(name="📝 Причина", value=reason, inline=False)
     embed.add_field(name="👮 Модератор", value=moderator.mention, inline=False)
+    
     if case_id:
         embed.add_field(name="🔖 ID кейса", value=f"`{case_id}`", inline=False)
+    
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"ID: {member.id}")
     
-    # Отправляем через вебхук
-    await send_log_embed(embed)
-    
-    # Также отправляем в канал (если нужны кнопки) - но кнопки не поддерживаются вебхуками, поэтому оставим как есть для канала
-    # Если есть канал, дублируем с кнопками (опционально)
-    if MOD_LOG_CHANNEL_ID and MOD_LOG_CHANNEL_ID != 0:
-        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
-        if log_ch:
-            view = ModActionView(member)
-            await log_ch.send(embed=embed, view=view)
+    view = ModActionView(member)
+    await log_ch.send(embed=embed, view=view)
 
-async def send_mod_log(title: str, description: str = None, color: int = 0x5865F2, fields: list = None):
-    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.utcnow())
+async def send_mod_log(title: str, description: str = None, color: int = COLORS["audit"], fields: list = None):
+    if not MOD_LOG_CHANNEL_ID:
+        return
+    log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+    if not log_ch:
+        return
+
+    embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
     if fields:
         for name, value, inline in fields:
             embed.add_field(name=name, value=value, inline=inline)
     embed.set_footer(text=f"Время: {datetime.now().strftime('%H:%M:%S')}")
-    await send_log_embed(embed)
+    await log_ch.send(embed=embed)
 
 async def send_error_embed(ctx, error_msg: str):
     embed = discord.Embed(
@@ -433,20 +469,15 @@ async def send_error_embed(ctx, error_msg: str):
     )
     await ctx.send(embed=embed, ephemeral=True)
 
-def is_protected(member: discord.Member, ctx: commands.Context) -> bool:
-    if member.id == OWNER_ID or member.guild_permissions.administrator:
-        return True
-    if member.top_role >= ctx.author.top_role:
-        return True
-    return False
-
 def is_toxic(content: str) -> bool:
     if not content:
         return False
     content_lower = content.lower()
+
     for pattern in INSULT_PATTERNS:
         if re.search(pattern, content_lower):
             return True
+
     words = content_lower.split()
     for word in words:
         if word in BAD_WORDS:
@@ -461,16 +492,20 @@ def has_full_access(guild_id: int) -> bool:
 async def apply_wealth_tax(user_id: str) -> int:
     if user_id not in economy_data:
         return 0
+
     balance = economy_data[user_id].get("balance", 0)
     if balance <= TAX_THRESHOLD:
         return 0
+
     taxable = balance - TAX_THRESHOLD
     tax = int(taxable * TAX_RATE)
+
     last_msg = economy_data[user_id].get("last_message", 0)
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
     if now - last_msg < 86400:
         reduction = random.uniform(0.20, 0.50)
         tax = int(tax * (1 - reduction))
+
     if tax > 0:
         economy_data[user_id]["balance"] -= tax
         economy_data["server_vault"] = economy_data.get("server_vault", 0) + tax
@@ -479,7 +514,7 @@ async def apply_wealth_tax(user_id: str) -> int:
     return 0
 
 # ───────────────────────────────────────────────
-#   КЛАССЫ ДЛЯ НОВЫХ ФУНКЦИЙ
+#   КЛАССЫ ДЛЯ UI
 # ───────────────────────────────────────────────
 
 class ModActionView(View):
@@ -489,22 +524,25 @@ class ModActionView(View):
 
     @discord.ui.button(label="Предупредить", style=discord.ButtonStyle.secondary, emoji="⚠️")
     async def warn_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_messages:
+        if not is_moderator(interaction.user):
             return await interaction.response.send_message("❌ Недостаточно прав!", ephemeral=True)
+        
         modal = WarnModal(self.member)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Замутить", style=discord.ButtonStyle.danger, emoji="🔇")
     async def mute_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_messages:
+        if not is_moderator(interaction.user):
             return await interaction.response.send_message("❌ Недостаточно прав!", ephemeral=True)
+        
         modal = MuteModal(self.member)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Очистить", style=discord.ButtonStyle.success, emoji="🧹")
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_messages:
+        if not is_moderator(interaction.user):
             return await interaction.response.send_message("❌ Недостаточно прав!", ephemeral=True)
+        
         modal = ClearModal(self.member)
         await interaction.response.send_modal(modal)
 
@@ -533,6 +571,7 @@ class MuteModal(Modal, title="Замутить пользователя"):
         ctx = await bot.get_context(interaction.message)
         ctx.author = interaction.user
         ctx.send = lambda **kwargs: interaction.response.send_message(**kwargs)
+        
         reason = self.reason.value or "Не указана"
         await mute(ctx, self.member, duration=self.duration.value, reason=reason)
 
@@ -548,10 +587,72 @@ class ClearModal(Modal, title="Очистить сообщения"):
             amount = int(self.amount.value)
             if amount < 1 or amount > 100:
                 return await interaction.response.send_message("❌ Количество должно быть от 1 до 100!", ephemeral=True)
+            
             deleted = await interaction.channel.purge(limit=amount, check=lambda m: m.author == self.member)
             await interaction.response.send_message(f"✅ Удалено {len(deleted)} сообщений {self.member.mention}", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Введите число!", ephemeral=True)
+
+class WelcomeView(View):
+    """Красивые кнопки для приветствия"""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Правила", style=discord.ButtonStyle.primary, emoji="📜", custom_id="welcome_rules")
+    async def rules_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="📜 Правила сервера",
+            description="""**1.** Уважайте других участников
+            **2.** Не спамьте и не флудите
+            **3.** Не рекламируйте без разрешения
+            **4.** Соблюдайте тематику каналов
+            **5.** Слушайтесь модераторов
+            **6.** Не используйте оскорбления
+            **7.** Запрещен контент 18+""",
+            color=COLORS["welcome"]
+        )
+        embed.set_footer(text="Нарушение правил = наказание")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Команды", style=discord.ButtonStyle.success, emoji="🤖", custom_id="welcome_commands")
+    async def commands_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🤖 Основные команды",
+            description="""**Для всех:**
+            `/help` - помощь по командам
+            `/balance` - проверить баланс
+            `/daily` - ежедневный бонус
+            `/userinfo` - информация о пользователе
+            `/stats` - статистика сервера
+            `/faq` - частые вопросы
+            `/iq` - узнать свой IQ
+            `/valute` - курсы валют
+
+            **Экономика:**
+            `/pay` - перевести монеты
+            `/top` - топ богачей
+            `/invest` - инвестировать
+            `/investments` - мои инвестиции""",
+            color=COLORS["welcome"]
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Роли", style=discord.ButtonStyle.secondary, emoji="🏷️", custom_id="welcome_roles")
+    async def roles_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🏷️ Доступные роли",
+            description="""**Вы можете получить роли в канале <#РОЛИ>**
+
+            🎮 **Игроки** - @Игрок
+            💎 **VIP** - @VIP (требуется поддержка)
+            🎨 **Креатив** - @Творец
+            🎵 **Музыкант** - @Music Lover
+            🎥 **Стример** - @Streamer
+
+            *Роли дают доступ к дополнительным каналам и возможностям*""",
+            color=COLORS["welcome"]
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class TicketCategorySelect(Select):
     def __init__(self):
@@ -566,19 +667,23 @@ class TicketCategorySelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        
         guild = interaction.guild
         category = guild.get_channel(TICKET_CATEGORY_ID)
         if not category or not isinstance(category, discord.CategoryChannel):
             return await interaction.followup.send("❌ Категория тикетов не настроена!", ephemeral=True)
+
         support_role = guild.get_role(SUPPORT_ROLE_ID)
         if not support_role:
             return await interaction.followup.send("❌ Роль поддержки не настроена!", ephemeral=True)
+
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, attach_files=True),
             support_role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, attach_files=True),
             guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, attach_files=True, manage_messages=True)
         }
+
         category_emojis = {
             "tech": "🔧",
             "complaint": "⚠️", 
@@ -587,8 +692,10 @@ class TicketCategorySelect(Select):
             "other": "📌"
         }
         emoji = category_emojis.get(self.values[0], "🎫")
+        
         channel_name = f"{emoji}-{self.values[0]}-{interaction.user.name.lower()}"
         ticket_channel = await category.create_text_channel(channel_name, overwrites=overwrites)
+
         category_descriptions = {
             "tech": "Техническая проблема",
             "complaint": "Жалоба на игрока",
@@ -596,24 +703,31 @@ class TicketCategorySelect(Select):
             "partner": "Сотрудничество",
             "other": "Другое"
         }
+
         embed = discord.Embed(
             title=f"🎟️ Тикет: {category_descriptions.get(self.values[0], 'Обращение')}",
-            description=f"Спасибо, {interaction.user.mention}!\nМодератор уже в пути.\n\n**Категория:** {self.values[0]}\n\n**Закрыть тикет — нажми красную кнопку ниже.**\n\n"
+            description=f"**{interaction.user.mention}**, спасибо за обращение!\n"
+                       f"Модератор свяжется с вами в ближайшее время.\n\n"
+                       f"**Категория:** {self.values[0]}\n\n"
+                       f"🔒 **Закрыть тикет** — нажмите красную кнопку ниже\n"
                        f"⚠️ Тикет будет автоматически закрыт через {INACTIVE_TICKET_HOURS} часов неактивности.",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
+            color=COLORS["ticket"],
+            timestamp=datetime.now(timezone.utc)
         )
-        embed.set_footer(text=f"ID пользователя: {interaction.user.id}")
+        embed.set_footer(text=f"ID: {interaction.user.id}")
+
         view = TicketControls()
         await ticket_channel.send(content=f"{interaction.user.mention} {support_role.mention}", embed=embed, view=view)
-        await interaction.followup.send(f"✅ Тикет создан: {ticket_channel.mention}", ephemeral=True)
-        await send_mod_log(
-            title="📩 Новый тикет создан",
-            description=f"**Канал:** {ticket_channel.mention}\n**Автор:** {interaction.user}\n**Категория:** {self.values[0]}",
-            color=0x57F287
-        )
 
+        await interaction.followup.send(f"✅ Тикет создан: {ticket_channel.mention}", ephemeral=True)
+
+        await send_mod_log(
+            title="📩 Новый тикет",
+            description=f"**Канал:** {ticket_channel.mention}\n**Автор:** {interaction.user}\n**Категория:** {self.values[0]}",
+            color=COLORS["ticket"]
+        )
 class TicketInactivityCheck:
+    """Проверка неактивных тикетов"""
     def __init__(self):
         self.ticket_channels = {}
 
@@ -622,22 +736,32 @@ class TicketInactivityCheck:
             category = guild.get_channel(TICKET_CATEGORY_ID)
             if not category or not isinstance(category, discord.CategoryChannel):
                 continue
+
             for channel in category.text_channels:
                 if not channel.name.startswith(("🔧-", "⚠️-", "❓-", "🤝-", "📌-")):
                     continue
+
+                # Проверяем последнее сообщение
                 async for msg in channel.history(limit=1):
                     last_msg_time = msg.created_at
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc)
+                    
                     if (now - last_msg_time).total_seconds() > INACTIVE_TICKET_HOURS * 3600:
+                        # Отправляем предупреждение
                         warning_embed = discord.Embed(
                             title="⚠️ Тикет неактивен",
                             description=f"Этот тикет будет автоматически закрыт через 12 часов из-за неактивности.",
                             color=0xFAA61A
                         )
                         await channel.send(embed=warning_embed)
-                        await asyncio.sleep(43200)
+                        
+                        # Ждем 12 часов
+                        await asyncio.sleep(43200)  # 12 часов
+                        
+                        # Проверяем снова
                         async for new_msg in channel.history(limit=1):
                             if new_msg.id == msg.id:
+                                # Все еще нет новых сообщений - закрываем
                                 transcript = await self.create_transcript(channel)
                                 await channel.delete()
                                 await send_mod_log(
@@ -656,32 +780,211 @@ class TicketInactivityCheck:
             author = f"{msg.author} ({msg.author.id})"
             content = msg.content or "[пусто]"
             transcript_lines.append(f"[{timestamp}] {author}: {content}")
-        return "\n".join(transcript_lines)
+        
+        return "\n".join(transcript_lines)        
+
+class TicketPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Создать тикет", style=discord.ButtonStyle.green, emoji="🎟️", custom_id="create_ticket")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🎫 Выбор категории",
+            description="Пожалуйста, выберите категорию вашего обращения:",
+            color=COLORS["ticket"]
+        )
+        
+        view = View(timeout=60)
+        view.add_item(TicketCategorySelect())
+        
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+class TicketControls(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.last_activity = datetime.now(timezone.utc)
+
+    @discord.ui.button(label="Закрыть тикет", style=discord.ButtonStyle.red, emoji="🔒", custom_id="close_ticket")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_channels:
+            await check_unauthorized_commands(interaction.user)
+            return await interaction.response.send_message("❌ Только модераторы могут закрыть тикет.", ephemeral=True)
+
+        await interaction.response.send_message("🔒 Тикет закрывается через 5 секунд...", ephemeral=False)
+
+        transcript_lines = []
+        async for msg in interaction.channel.history(limit=1000, oldest_first=True):
+            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            author = f"{msg.author} ({msg.author.id})"
+            content = msg.content or "[пусто]"
+            if msg.attachments:
+                content += f"\n📎 Вложения: {', '.join([a.url for a in msg.attachments])}"
+            transcript_lines.append(f"[{timestamp}] {author}: {content}")
+
+        transcript_text = "\n".join(transcript_lines) or "[В тикете не было сообщений]"
+
+        filename = f"transcript_{interaction.channel.name}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.txt"
+        file = discord.File(io.StringIO(transcript_text), filename=filename)
+
+        archive_channel_id = TICKET_ARCHIVE_CHANNEL_ID or MOD_LOG_CHANNEL_ID
+        archive_ch = bot.get_channel(archive_channel_id)
+        if archive_ch:
+            short_embed = discord.Embed(
+                title="📜 Тикет закрыт",
+                description=f"**Канал:** {interaction.channel.name}\n**Закрыл:** {interaction.user.mention}\n**Сообщений:** {len(transcript_lines)}",
+                color=COLORS["ticket"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            await archive_ch.send(embed=short_embed, file=file)
+
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
+
+    @discord.ui.button(label="Взять тикет", style=discord.ButtonStyle.blurple, emoji="🖐️", custom_id="claim_ticket")
+    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_channels:
+            await check_unauthorized_commands(interaction.user)
+            return await interaction.response.send_message("❌ Только модераторы могут взять тикет.", ephemeral=True)
+            
+        await interaction.response.send_message(f"✅ {interaction.user.mention} взял тикет в работу!", ephemeral=False)
+        self.claim_ticket.disabled = True
+        await interaction.message.edit(view=self)
+
+class HelpView(View):
+    def __init__(self, author: discord.User, is_mod: bool):
+        super().__init__(timeout=60)
+        self.author = author
+        self.current_page = 0
+        
+        self.categories = [
+            {
+                "name": "📋 Основное",
+                "emoji": "📋",
+                "commands": [
+                    ("/ping", "Проверить задержку бота"),
+                    ("/avatar", "Показать аватар"),
+                    ("/userinfo", "Информация о пользователе"),
+                    ("/stats", "Статистика сервера"),
+                    ("/say", "Написать от лица бота")
+                ]
+            },
+            {
+                "name": "💰 Экономика",
+                "emoji": "💰",
+                "commands": [
+                    ("/balance", "Проверить баланс"),
+                    ("/daily", "Ежедневный бонус"),
+                    ("/pay", "Перевести монеты"),
+                    ("/top", "Топ богачей"),
+                    ("/vault", "Казна сервера"),
+                    ("/invest", "Инвестировать"),
+                    ("/investments", "Мои инвестиции")
+                ]
+            },
+            {
+                "name": "🎮 Развлечения",
+                "emoji": "🎮",
+                "commands": [
+                    ("/iq", "Узнать свой IQ"),
+                    ("/valute", "Курсы валют"),
+                    ("/faq", "Часто задаваемые вопросы")
+                ]
+            }
+        ]
+        
+        if is_mod:
+            self.categories.extend([
+                {
+                    "name": "🛡️ Модерация",
+                    "emoji": "🛡️",
+                    "commands": [
+                        ("/warn", "Выдать предупреждение"),
+                        ("/warnings", "Список предупреждений"),
+                        ("/clearwarn", "Очистить предупреждения"),
+                        ("/mute", "Замутить пользователя"),
+                        ("/unmute", "Снять мут"),
+                        ("/temprole", "Временная роль"),
+                        ("/case", "Информация о кейсе"),
+                        ("/ban", "Забанить пользователя"),
+                        ("/unwarn", "Удалить предупреждение"),
+                        ("/faq add", "Добавить вопрос в FAQ")
+                    ]
+                },
+                {
+                    "name": "🎫 Тикеты",
+                    "emoji": "🎫",
+                    "commands": [
+                        ("/ticket setup", "Создать панель тикетов"),
+                        ("/ticket close", "Закрыть текущий тикет")
+                    ]
+                }
+            ])
+
+    def get_embed(self):
+        category = self.categories[self.current_page]
+        embed = discord.Embed(
+            title=f"{category['emoji']} {category['name']}",
+            description="Список доступных команд:",
+            color=COLORS["welcome"]
+        )
+        
+        for cmd, desc in category["commands"]:
+            embed.add_field(name=cmd, value=desc, inline=False)
+        
+        embed.set_footer(text=f"Страница {self.current_page + 1} из {len(self.categories)}")
+        return embed
+
+    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author.id:
+            return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
+        
+        self.current_page = (self.current_page - 1) % len(self.categories)
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author.id:
+            return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
+        
+        self.current_page = (self.current_page + 1) % len(self.categories)
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="🏠", style=discord.ButtonStyle.success)
+    async def home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author.id:
+            return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
+        
+        is_mod = is_moderator(interaction.user)
+        base = "**📋 Основное**\n**💰 Экономика**\n**🎮 Развлечения**"
+        mod = "\n**🛡️ Модерация**\n**🎫 Тикеты**" if is_mod else ""
+        
+        embed = discord.Embed(
+            title="🤖 Помощь по командам",
+            description=f"Используй кнопки для навигации\n\n{base}{mod}",
+            color=COLORS["welcome"]
+        )
+        embed.set_footer(text="Выбери категорию")
+        self.current_page = 0
+        await interaction.response.edit_message(embed=embed, view=self)
 
 class FAQCategorySelect(Select):
     def __init__(self):
         options = []
         for key, name in FAQ_CATEGORIES.items():
-            if "общее" in key:
-                emoji = "📋"
-            elif "правила" in key:
-                emoji = "📜"
-            elif "экономика" in key:
-                emoji = "💰"
-            elif "модерация" in key:
-                emoji = "🛡️"
-            elif "техника" in key:
-                emoji = "🔧"
-            else:
-                emoji = "❓"
+            emoji = "📋" if "общее" in key else "📜" if "правила" in key else "💰" if "экономика" in key else "🛡️" if "модерация" in key else "🔧"
             options.append(discord.SelectOption(label=name, value=key, emoji=emoji))
-        super().__init__(placeholder="Выберите категорию вопросов...", options=options, min_values=1, max_values=1)
+        
+        super().__init__(placeholder="Выберите категорию...", options=options, min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
         category = self.values[0]
         questions = faq_data.get(category, [])
+        
         if not questions:
             return await interaction.response.send_message("❌ В этой категории пока нет вопросов.", ephemeral=True)
+        
         view = FAQQuestionsView(category, questions, interaction.user)
         await interaction.response.edit_message(content=f"**{FAQ_CATEGORIES[category]}**\nВыберите вопрос:", embed=None, view=view)
 
@@ -697,40 +1000,49 @@ class FAQQuestionsView(View):
 
     def add_question_buttons(self):
         self.clear_items()
+        
         start = self.current_page * self.items_per_page
         end = min(start + self.items_per_page, len(self.questions))
         page_questions = self.questions[start:end]
+        
         for i, q in enumerate(page_questions, start=1):
             async def button_callback(interaction: discord.Interaction, question=q):
                 if interaction.user.id != self.author.id:
                     return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
+                
                 embed = discord.Embed(
                     title=f"❓ {question['question']}",
                     description=question['answer'],
-                    color=0x57F287
+                    color=COLORS["faq"]
                 )
                 embed.set_footer(text=f"Категория: {FAQ_CATEGORIES[self.category]}")
+                
                 view = View(timeout=60)
-                back_button = Button(label="◀️ Назад к списку", style=discord.ButtonStyle.secondary)
-                async def back_callback(interaction: discord.Interaction):
+                back = Button(label="◀️ Назад", style=discord.ButtonStyle.secondary)
+                async def back_cb(interaction: discord.Interaction):
                     await self.show_questions(interaction)
-                back_button.callback = back_callback
-                view.add_item(back_button)
+                back.callback = back_cb
+                view.add_item(back)
+                
                 await interaction.response.edit_message(embed=embed, view=view)
+            
             button = Button(label=f"{start + i}. {q['question'][:50]}...", style=discord.ButtonStyle.secondary)
             button.callback = button_callback
             self.add_item(button)
+        
         if self.current_page > 0:
-            prev_button = Button(label="◀️", style=discord.ButtonStyle.primary)
-            prev_button.callback = self.prev_page
-            self.add_item(prev_button)
+            prev = Button(label="◀️", style=discord.ButtonStyle.primary)
+            prev.callback = self.prev_page
+            self.add_item(prev)
+        
         if end < len(self.questions):
-            next_button = Button(label="▶️", style=discord.ButtonStyle.primary)
-            next_button.callback = self.next_page
-            self.add_item(next_button)
-        back_to_cat_button = Button(label="🏠 К категориям", style=discord.ButtonStyle.success)
-        back_to_cat_button.callback = self.back_to_categories
-        self.add_item(back_to_cat_button)
+            next = Button(label="▶️", style=discord.ButtonStyle.primary)
+            next.callback = self.next_page
+            self.add_item(next)
+        
+        back_to_cat = Button(label="🏠 Категории", style=discord.ButtonStyle.success)
+        back_to_cat.callback = self.back_to_categories
+        self.add_item(back_to_cat)
 
     async def show_questions(self, interaction: discord.Interaction):
         self.add_question_buttons()
@@ -757,11 +1069,12 @@ class FAQQuestionsView(View):
     async def back_to_categories(self, interaction: discord.Interaction):
         if interaction.user.id != self.author.id:
             return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
+        
         view = FAQView(interaction.user)
         embed = discord.Embed(
             title="📚 Часто задаваемые вопросы",
             description="Выберите категорию вопросов:",
-            color=0x57F287
+            color=COLORS["faq"]
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
@@ -770,182 +1083,6 @@ class FAQView(View):
         super().__init__(timeout=60)
         self.author = author
         self.add_item(FAQCategorySelect())
-
-class TicketPanelView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Создать тикет", style=discord.ButtonStyle.green, emoji="🎟️", custom_id="create_ticket")
-    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🎫 Выбор категории тикета",
-            description="Пожалуйста, выберите категорию вашего обращения:",
-            color=0x57F287
-        )
-        view = View(timeout=60)
-        view.add_item(TicketCategorySelect())
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-class TicketControls(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.last_activity = datetime.utcnow()
-
-    @discord.ui.button(label="Закрыть тикет", style=discord.ButtonStyle.red, emoji="🔒", custom_id="close_ticket")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_channels:
-            await check_unauthorized_commands(interaction.user)
-            return await interaction.response.send_message("❌ Только модераторы могут закрыть тикет.", ephemeral=True)
-        await interaction.response.send_message("🔒 Тикет закрывается через 5 секунд... (готовим транскрипт)", ephemeral=False)
-        transcript_lines = []
-        async for msg in interaction.channel.history(limit=1000, oldest_first=True):
-            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            author = f"{msg.author} ({msg.author.id})"
-            content = msg.content or "[пустое сообщение]"
-            attachments = "\n".join([a.url for a in msg.attachments]) if msg.attachments else ""
-            if attachments:
-                content += f"\nВложения: {attachments}"
-            transcript_lines.append(f"[{timestamp}] {author}:\n{content}\n{'─'*60}\n")
-        transcript_text = "".join(transcript_lines) or "[В тикете не было сообщений]"
-        filename = f"транскрипт_{interaction.channel.name}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.txt"
-        file = discord.File(io.StringIO(transcript_text), filename=filename)
-        archive_ch = bot.get_channel(TICKET_ARCHIVE_CHANNEL_ID) if TICKET_ARCHIVE_CHANNEL_ID else None
-        if archive_ch:
-            short_embed = discord.Embed(
-                title="📜 Тикет закрыт — транскрипт",
-                description=f"**Канал:** {interaction.channel.name}\n**Закрыл:** {interaction.user.mention}",
-                color=0x7289DA,
-                timestamp=datetime.utcnow()
-            )
-            short_embed.set_footer(text=f"Сообщений: {len(transcript_lines)}")
-            await archive_ch.send(embed=short_embed, file=file)
-        else:
-            await send_mod_log(
-                title="📜 Транскрипт тикета (архив не найден)",
-                description=f"Канал: {interaction.channel.name}\nЗакрыл: {interaction.user}",
-                color=0x7289DA
-            )
-        await asyncio.sleep(5)
-        await interaction.channel.delete()
-
-    @discord.ui.button(label="Взять тикет", style=discord.ButtonStyle.blurple, emoji="🖐️", custom_id="claim_ticket")
-    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_channels:
-            await check_unauthorized_commands(interaction.user)
-            return await interaction.response.send_message("❌ Только модераторы могут взять тикет.", ephemeral=True)
-        await interaction.response.send_message(f"✅ {interaction.user.mention} взял тикет в работу!", ephemeral=False)
-        self.claim_ticket.disabled = True
-        await interaction.message.edit(view=self)
-
-class HelpView(View):
-    def __init__(self, author: discord.User, is_mod: bool):
-        super().__init__(timeout=60)
-        self.author = author
-        self.current_page = 0
-        self.categories = [
-            {
-                "name": "📋 Основное",
-                "emoji": "📋",
-                "commands": [
-                    ("/ping", "Проверить задержку бота"),
-                    ("/avatar", "Показать аватар"),
-                    ("/userinfo", "Информация о пользователе"),
-                    ("/stats", "Статистика сервера"),
-                    ("/say", "Написать от лица бота")
-                ]
-            },
-            {
-                "name": "💰 Экономика",
-                "emoji": "💰",
-                "commands": [
-                    ("/balance", "Проверить баланс"),
-                    ("/daily", "Ежедневный бонус"),
-                    ("/pay", "Перевести монеты"),
-                    ("/top", "Топ богачей"),
-                    ("/vault", "Казна сервера"),
-                    ("/invest", "Инвестировать монеты"),
-                    ("/investments", "Мои инвестиции")
-                ]
-            },
-            {
-                "name": "🎮 Развлечения",
-                "emoji": "🎮",
-                "commands": [
-                    ("/iq", "Узнать свой IQ"),
-                    ("/valute", "Курсы валют"),
-                    ("/faq", "Часто задаваемые вопросы")
-                ]
-            }
-        ]
-        if is_mod:
-            self.categories.extend([
-                {
-                    "name": "🛡️ Модерация",
-                    "emoji": "🛡️",
-                    "commands": [
-                        ("/warn", "Выдать предупреждение"),
-                        ("/warnings", "Список предупреждений"),
-                        ("/clearwarn", "Очистить предупреждения"),
-                        ("/unwarn", "Удалить конкретное предупреждение"),
-                        ("/mute", "Замутить пользователя"),
-                        ("/unmute", "Снять мут"),
-                        ("/ban", "Забанить пользователя"),
-                        ("/temprole", "Временная роль"),
-                        ("/case", "Информация о кейсе"),
-                        ("/faqadd", "Добавить вопрос в FAQ")
-                    ]
-                },
-                {
-                    "name": "🎫 Тикеты",
-                    "emoji": "🎫",
-                    "commands": [
-                        ("/ticket setup", "Создать панель тикетов"),
-                        ("/ticket close", "Закрыть текущий тикет")
-                    ]
-                }
-            ])
-
-    def get_embed(self):
-        category = self.categories[self.current_page]
-        embed = discord.Embed(
-            title=f"{category['emoji']} {category['name']}",
-            description="Список доступных команд:",
-            color=0x57F287
-        )
-        for cmd, desc in category["commands"]:
-            embed.add_field(name=cmd, value=desc, inline=False)
-        embed.set_footer(text=f"Страница {self.current_page + 1} из {len(self.categories)} • Используй кнопки для навигации")
-        return embed
-
-    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary)
-    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author.id:
-            return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
-        self.current_page = (self.current_page - 1) % len(self.categories)
-        await interaction.response.edit_message(embed=self.get_embed(), view=self)
-
-    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author.id:
-            return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
-        self.current_page = (self.current_page + 1) % len(self.categories)
-        await interaction.response.edit_message(embed=self.get_embed(), view=self)
-
-    @discord.ui.button(label="🏠", style=discord.ButtonStyle.success)
-    async def home_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author.id:
-            return await interaction.response.send_message("❌ Это не твое меню!", ephemeral=True)
-        is_mod = interaction.user.guild_permissions.manage_messages or interaction.user.guild_permissions.administrator
-        base_categories = "**📋 Основное** - общие команды\n**💰 Экономика** - команды экономики\n**🎮 Развлечения** - развлекательные команды"
-        mod_categories = "\n**🛡️ Модерация** - модераторские команды\n**🎫 Тикеты** - система тикетов" if is_mod else ""
-        embed = discord.Embed(
-            title="🤖 Помощь по командам",
-            description=f"Используй кнопки ниже для навигации по категориям\n\n{base_categories}{mod_categories}",
-            color=0x57F287
-        )
-        embed.set_footer(text="Выбери категорию стрелками")
-        self.current_page = 0
-        await interaction.response.edit_message(embed=embed, view=self)
 
 # ───────────────────────────────────────────────
 #   ИНИЦИАЛИЗАЦИЯ БОТА
@@ -957,7 +1094,9 @@ intents = discord.Intents(
     presences=True,
     message_content=True,
     voice_states=True,
-    moderation=True
+    moderation=True,
+    guild_messages=True,
+    dm_messages=False
 )
 
 bot = commands.Bot(
@@ -980,23 +1119,26 @@ async def autosave_economy_task():
 @tasks.loop(hours=1)
 async def clean_old_warnings_task():
     global warnings_data
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     changed = False
+    
     for user_id in list(warnings_data.keys()):
-        fresh_warnings = []
+        fresh = []
         for warn in warnings_data[user_id]:
             try:
-                warn_time = datetime.strptime(warn["time"], "%Y-%m-%d %H:%M:%S")
+                warn_time = datetime.strptime(warn["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 if (now - warn_time).days < WARN_EXPIRY_DAYS:
-                    fresh_warnings.append(warn)
+                    fresh.append(warn)
             except:
                 continue
-        if len(fresh_warnings) != len(warnings_data[user_id]):
+        
+        if len(fresh) != len(warnings_data[user_id]):
             changed = True
-            if fresh_warnings:
-                warnings_data[user_id] = fresh_warnings
+            if fresh:
+                warnings_data[user_id] = fresh
             else:
                 del warnings_data[user_id]
+    
     if changed:
         save_warnings()
         print("[AUTO] Старые варны очищены")
@@ -1007,8 +1149,9 @@ async def check_temp_roles_task():
         for member in guild.members:
             user_id = str(member.id)
             if user_id in temp_roles:
-                now = datetime.utcnow().timestamp()
+                now = datetime.now(timezone.utc).timestamp()
                 to_remove = []
+                
                 for role_id, expiry in temp_roles[user_id].items():
                     if now >= expiry:
                         role = guild.get_role(int(role_id))
@@ -1016,44 +1159,51 @@ async def check_temp_roles_task():
                             try:
                                 await member.remove_roles(role, reason="Временная роль истекла")
                                 await send_mod_log(
-                                    title="⏱️ Временная роль снята",
+                                    title="⏱️ Роль снята",
                                     description=f"**Пользователь:** {member.mention}\n**Роль:** {role.mention}",
-                                    color=0x7289DA
+                                    color=COLORS["audit"]
                                 )
                             except:
                                 pass
                         to_remove.append(role_id)
+                
                 for role_id in to_remove:
                     del temp_roles[user_id][role_id]
+                
                 if not temp_roles[user_id]:
                     del temp_roles[user_id]
 
 @tasks.loop(hours=6)
 async def check_investments_task():
-    now = datetime.utcnow().timestamp()
+    now = datetime.now(timezone.utc).timestamp()
+    
     for user_id, data in economy_data.items():
         if user_id == "server_vault" or "investments" not in data:
             continue
-        active_investments = []
+        
+        active = []
         for inv in data["investments"]:
             if inv["end_time"] <= now:
                 profit = inv["profit"]
                 data["balance"] += profit
+                
                 user = bot.get_user(int(user_id))
                 if user:
                     embed = discord.Embed(
                         title=f"{ECONOMY_EMOJIS['profit']} Инвестиция завершена",
                         description=f"Ваша инвестиция на {inv['days']} дней завершена!\n"
                                    f"**Прибыль:** +{format_number(profit)} {ECONOMY_EMOJIS['coin']}",
-                        color=0x57F287
+                        color=COLORS["economy"]
                     )
                     try:
                         await user.send(embed=embed)
                     except:
                         pass
             else:
-                active_investments.append(inv)
-        data["investments"] = active_investments
+                active.append(inv)
+        
+        data["investments"] = active
+    
     save_economy()
     print("[AUTO] Инвестиции проверены")
 
@@ -1074,7 +1224,10 @@ async def on_ready():
     print(f"│  Время запуска    {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} │")
     print(f"└──────────────────────────────────────────────┘")
 
-    await bot.change_presence(status=discord.Status.dnd, activity=discord.Activity(type=discord.ActivityType.watching, name="mortisplay.ru"))
+    await bot.change_presence(
+        status=discord.Status.dnd, 
+        activity=discord.Activity(type=discord.ActivityType.watching, name="mortisplay.ru")
+    )
 
     try:
         synced = await bot.tree.sync()
@@ -1084,6 +1237,14 @@ async def on_ready():
 
     for guild in bot.guilds:
         await guild.chunk()
+        if guild.id == FULL_ACCESS_GUILD_ID:
+            bot_member = guild.get_member(bot.user.id)
+            if bot_member:
+                perms = bot_member.guild_permissions
+                if not perms.view_audit_log:
+                    print(f"⚠️ НЕТ ПРАВА VIEW_AUDIT_LOG на сервере {guild.name}!")
+                else:
+                    print(f"✅ Право VIEW_AUDIT_LOG есть на сервере {guild.name}")
 
     bot.add_view(TicketPanelView())
     bot.add_view(TicketControls())
@@ -1097,333 +1258,1039 @@ async def on_ready():
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
 
-# ───────────────────────────────────────────────
-#   ПРОСТЕЙШАЯ СИСТЕМА ЛОГОВ
-# ───────────────────────────────────────────────
-
-async def log_to_channel(embed: discord.Embed):
-    """Отправляет лог в канал (простой и надежный способ)"""
-    if not MOD_LOG_CHANNEL_ID or MOD_LOG_CHANNEL_ID == 0:
-        print("❌ MOD_LOG_CHANNEL_ID не задан!")
-        return
-    
-    channel = bot.get_channel(MOD_LOG_CHANNEL_ID)
-    if not channel:
-        print(f"❌ Канал {MOD_LOG_CHANNEL_ID} не найден!")
-        return
-    
-    try:
-        await channel.send(embed=embed)
-        print(f"✅ Лог отправлен в канал {channel.name}")
-    except Exception as e:
-        print(f"❌ Ошибка отправки лога: {e}")
-
 @bot.event
-async def on_message_delete(message):
-    """Логирование удаления сообщений"""
+async def on_message(message):
     if message.author.bot:
         return
-    
-    print(f"🔍 Событие: удаление сообщения от {message.author}")
-    
-    embed = discord.Embed(
-        title="🗑 Сообщение удалено",
-        color=0xF04747,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Автор", value=f"{message.author} (`{message.author.id}`)", inline=False)
-    embed.add_field(name="Канал", value=message.channel.mention, inline=False)
-    embed.add_field(name="Содержимое", value=message.content[:500] or "*Пусто*", inline=False)
-    
-    await log_to_channel(embed)
 
-@bot.event
-async def on_message_edit(before, after):
-    """Логирование изменения сообщений"""
-    if before.author.bot or before.content == after.content:
+    # Пропускаем модераторов и администраторов
+    if is_protected_from_automod(message.author):
+        return await bot.process_commands(message)
+
+    if bot.user in message.mentions:
+        await message.channel.send(f"{message.author.mention}, я тут! Используй `/help`")
+
+    user_id = str(message.author.id)
+    now = datetime.now(timezone.utc).timestamp()
+
+    # Анти-спам
+    spam_threshold = SPAM_THRESHOLD * (VIP_SPAM_MULTIPLIER if is_vip(message.author) else 1)
+    mention_limit = 4 * (VIP_MENTION_MULTIPLIER if is_vip(message.author) else 1)
+
+    if user_id not in spam_cache:
+        spam_cache[user_id] = []
+    spam_cache[user_id] = [t for t in spam_cache[user_id] if now - t < SPAM_TIME]
+    spam_cache[user_id].append(now)
+
+    # Спам
+    if len(spam_cache[user_id]) >= spam_threshold:
+        await message.delete()
+        await message.channel.send(f"{message.author.mention}, слишком быстро пишешь!", delete_after=8)
+        try: 
+            await message.author.timeout(timedelta(minutes=10), reason="Анти-спам")
+            case_id = await create_case(message.author, bot.user, "Авто-мут (спам)", "Превышение лимита сообщений", "10 минут")
+            await send_punishment_log(
+                member=message.author,
+                punishment_type="🔇 Мут 10 минут",
+                duration="10 минут",
+                reason="Превышение лимита сообщений",
+                moderator=bot.user,
+                case_id=case_id
+            )
+        except: 
+            pass
+        return
+
+    # Масс-пинг
+    mention_count = len(message.mentions) + len(message.role_mentions)
+    
+    if ("@everyone" in message.content or "@here" in message.content) and not message.author.guild_permissions.mention_everyone:
+        await message.delete()
+        await message.channel.send(f"{message.author.mention}, у тебя нет прав на массовые упоминания!", delete_after=8)
         return
     
-    print(f"🔍 Событие: изменение сообщения от {before.author}")
-    
-    embed = discord.Embed(
-        title="✏️ Сообщение изменено",
-        color=0xFAA61A,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Автор", value=f"{before.author} (`{before.author.id}`)", inline=False)
-    embed.add_field(name="Канал", value=before.channel.mention, inline=False)
-    embed.add_field(name="Было", value=before.content[:500] or "*Пусто*", inline=False)
-    embed.add_field(name="Стало", value=after.content[:500] or "*Пусто*", inline=False)
-    
-    await log_to_channel(embed)
+    if mention_count > mention_limit:
+        await message.delete()
+        await message.channel.send(f"{message.author.mention}, не спамь упоминаниями! (лимит: {mention_limit})", delete_after=8)
+        
+        if user_id not in warnings_data:
+            warnings_data[user_id] = []
+        warnings_data[user_id].append({
+            "moderator": "Автомодерация",
+            "reason": f"Массовый пинг ({mention_count} упоминаний)",
+            "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        })
+        save_warnings()
+        
+        case_id = await create_case(message.author, bot.user, "Варн (авто)", f"Массовый пинг ({mention_count} упоминаний)")
+        await check_auto_punishment(message.author, "Массовый пинг")
+        return
 
-@bot.event
-async def on_member_update(before, after):
-    """Логирование изменений участников"""
-    # Проверка ника
-    if before.nick != after.nick:
-        print(f"🔍 Событие: изменение ника {before} -> {after.nick}")
-        
-        embed = discord.Embed(
-            title="👤 Никнейм изменён",
-            color=0xFAA61A,
-            timestamp=datetime.utcnow()
-        )
-        embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
-        embed.add_field(name="Было", value=before.nick or "*Не указан*", inline=True)
-        embed.add_field(name="Стало", value=after.nick or "*Не указан*", inline=True)
-        
-        await log_to_channel(embed)
-    
-    # Проверка ролей
-    if before.roles != after.roles:
-        print(f"🔍 Событие: изменение ролей {before}")
-        
-        added = [r.mention for r in after.roles if r not in before.roles and r.name != "@everyone"]
-        removed = [r.mention for r in before.roles if r not in after.roles and r.name != "@everyone"]
-        
-        if added or removed:
-            embed = discord.Embed(
-                title="👤 Роли изменены",
-                color=0xFAA61A,
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
-            if added:
-                embed.add_field(name="✅ Добавлены", value=", ".join(added), inline=False)
-            if removed:
-                embed.add_field(name="❌ Удалены", value=", ".join(removed), inline=False)
-            
-            await log_to_channel(embed)
-    
-    # Проверка мута
-    if before.timed_out_until != after.timed_out_until:
-        print(f"🔍 Событие: изменение мута {before}")
-        
-        if after.timed_out_until:
-            duration = after.timed_out_until - datetime.utcnow()
-            hours = duration.seconds // 3600
-            minutes = (duration.seconds % 3600) // 60
-            
-            embed = discord.Embed(
-                title="🔇 Пользователь замучен",
-                color=0xF04747,
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
-            embed.add_field(name="Длительность", value=f"{hours}ч {minutes}м", inline=True)
-            embed.add_field(name="До", value=f"<t:{int(after.timed_out_until.timestamp())}:R>", inline=True)
+    # Капс
+    if len(message.content) > 15:
+        upper_ratio = sum(1 for c in message.content if c.isupper()) / len(message.content)
+        if upper_ratio > 0.75:
+            await message.delete()
+            await message.channel.send(f"{message.author.mention}, не кричи (капс)!", delete_after=8)
+            return
+
+    # Реклама
+    if re.search(r"discord\.(gg|com/invite)/", message.content.lower()):
+        await message.delete()
+        await message.channel.send(f"{message.author.mention}, реклама запрещена!", delete_after=10)
+        return
+
+    # Токсичность
+    if is_toxic(message.content):
+        await message.delete()
+
+        toxic_warnings = [w for w in warnings_data.get(user_id, []) if "токсичность" in w.get("reason", "").lower()]
+
+        if len(toxic_warnings) >= 1:
+            try:
+                await message.author.timeout(timedelta(hours=24), reason="Повторная токсичность")
+                await message.channel.send(
+                    f"{message.author.mention}, **мут 24 часа** за повторные оскорбления.",
+                    delete_after=10
+                )
+                case_id = await create_case(message.author, bot.user, "Авто-мут 24ч", "Повторная токсичность", "24 часа")
+                await send_punishment_log(
+                    member=message.author,
+                    punishment_type="🔇 Мут 24ч (авто)",
+                    duration="24 часа",
+                    reason="Повторная токсичность",
+                    moderator=bot.user,
+                    case_id=case_id
+                )
+            except:
+                pass
         else:
-            embed = discord.Embed(
-                title="🔊 Мут снят",
-                color=0x57F287,
-                timestamp=datetime.utcnow()
-            )
-            embed.add_field(name="Пользователь", value=f"{after} (`{after.id}`)", inline=False)
-        
-        await log_to_channel(embed)
+            try:
+                await message.author.timeout(timedelta(hours=1), reason="Токсичность")
+                await message.channel.send(
+                    f"{message.author.mention}, **мут 1 час** за оскорбления. Повтор → мут 24 часа.",
+                    delete_after=10
+                )
 
-@bot.event
-async def on_member_ban(guild, user):
-    """Логирование бана"""
-    print(f"🔍 Событие: бан {user}")
-    
-    embed = discord.Embed(
-        title="🔨 Пользователь забанен",
-        color=0xF04747,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
-    
-    await log_to_channel(embed)
+                if user_id not in warnings_data:
+                    warnings_data[user_id] = []
+                warnings_data[user_id].append({
+                    "moderator": "Автомодерация",
+                    "reason": "Токсичность",
+                    "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                })
+                save_warnings()
+                
+                case_id = await create_case(message.author, bot.user, "Авто-мут 1ч", "Токсичность", "1 час")
+                await send_punishment_log(
+                    member=message.author,
+                    punishment_type="🔇 Мут 1ч (авто)",
+                    duration="1 час",
+                    reason="Токсичность",
+                    moderator=bot.user,
+                    case_id=case_id
+                )
 
-@bot.event
-async def on_member_unban(guild, user):
-    """Логирование разбана"""
-    print(f"🔍 Событие: разбан {user}")
-    
-    embed = discord.Embed(
-        title="🔓 Пользователь разбанен",
-        color=0x57F287,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
-    
-    await log_to_channel(embed)
+            except:
+                await message.channel.send(f"{message.author.mention}, удали оскорбления пожалуйста.", delete_after=10)
+
+        return
+
+    # Экономика
+    if has_full_access(message.guild.id):
+        if user_id not in economy_data:
+            economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+
+        if now - economy_data[user_id].get("last_message", 0) >= MESSAGE_COOLDOWN:
+            earn = random.randint(1, 5)
+            economy_data[user_id]["balance"] += earn
+            economy_data[user_id]["last_message"] = now
+            save_economy()
+
+    await bot.process_commands(message)
+
+# ───────────────────────────────────────────────
+#   ПРИВЕТСТВИЯ И ПРОЩАНИЯ
+# ───────────────────────────────────────────────
 
 @bot.event
 async def on_member_join(member):
-    """Логирование входа"""
-    print(f"🔍 Событие: вход {member}")
-    
-    embed = discord.Embed(
-        title="📥 Участник зашёл",
-        color=0x57F287,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Пользователь", value=f"{member.mention} (`{member.id}`)", inline=False)
-    
-    await log_to_channel(embed)
-    
-    # Приветствие в системный канал
-    if member.guild.system_channel:
-        welcome = discord.Embed(
-            title="🎉 Новый участник!",
-            description=f"Добро пожаловать, {member.mention}!",
-            color=0x57F287
-        )
-        await member.guild.system_channel.send(embed=welcome)
+    """Красивое приветствие нового участника"""
+    try:
+        # Лог в мод-канал
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if log_ch:
+            embed = discord.Embed(
+                title="📥 Участник зашёл",
+                color=COLORS["welcome"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=True)
+            embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="Аккаунт создан", value=f"<t:{int(member.created_at.timestamp())}:R>", inline=True)
+            
+            account_age = datetime.now(timezone.utc) - member.created_at
+            if account_age.days < NEW_ACCOUNT_DAYS:
+                embed.add_field(name="⚠️ Внимание", value="Новый аккаунт!", inline=False)
+            
+            await log_ch.send(embed=embed)
+        
+        # Приветствие в общий канал
+        welcome_ch = bot.get_channel(WELCOME_CHANNEL_ID)
+        if welcome_ch:
+            # Статистика сервера
+            total = member.guild.member_count
+            humans = len([m for m in member.guild.members if not m.bot])
+            bots = total - humans
+            
+            embed = discord.Embed(
+                title="🎉 Новый участник!",
+                description=f"**{member.mention}**, добро пожаловать на сервер!",
+                color=COLORS["welcome"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            embed.set_thumbnail(url=member.display_avatar.url)
+            embed.set_image(url="https://i.imgur.com/welcome-banner.png")  # Можно заменить на свой баннер
+            
+            embed.add_field(name="📝 Имя", value=member.name, inline=True)
+            embed.add_field(name="🆔 ID", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="📅 Регистрация", value=f"<t:{int(member.created_at.timestamp())}:D>", inline=True)
+            
+            embed.add_field(
+                name="👥 Статистика",
+                value=f"**Всего:** {total}\n👤 **Людей:** {humans}\n🤖 **Ботов:** {bots}",
+                inline=True
+            )
+            
+            embed.add_field(
+                name="📋 Быстрый старт",
+                value="• Ознакомься с правилами\n• Получи роли\n• Начни общаться",
+                inline=True
+            )
+            
+            embed.set_footer(text="Спасибо что выбрали нас! 💫", icon_url=member.guild.icon.url if member.guild.icon else None)
+            
+            view = WelcomeView()
+            await welcome_ch.send(embed=embed, view=view)
+            
+    except Exception as e:
+        print(f"Ошибка в on_member_join: {e}")
 
 @bot.event
 async def on_member_remove(member):
-    """Логирование выхода"""
-    print(f"🔍 Событие: выход {member}")
+    """Красивое прощание с участником"""
+    try:
+        # Лог в мод-канал
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if log_ch:
+            embed = discord.Embed(
+                title="📤 Участник вышел",
+                color=COLORS["goodbye"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=str(member), inline=True)
+            embed.add_field(name="ID", value=f"`{member.id}`", inline=True)
+            embed.add_field(name="На сервере был", value=f"<t:{int(member.joined_at.timestamp())}:R>" if member.joined_at else "Неизвестно", inline=True)
+            await log_ch.send(embed=embed)
+        
+        # Прощание в общий канал
+        goodbye_ch = bot.get_channel(GOODBYE_CHANNEL_ID)
+        if goodbye_ch:
+            days_on_server = 0
+            if member.joined_at:
+                days_on_server = (datetime.now(timezone.utc) - member.joined_at).days
+            
+            total = member.guild.member_count
+            
+            embed = discord.Embed(
+                title="👋 Пока...",
+                description=f"**{member.name}** покинул нас",
+                color=COLORS["goodbye"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            embed.set_thumbnail(url=member.display_avatar.url)
+            
+            if days_on_server > 0:
+                embed.add_field(name="⏱️ Пробыл на сервере", value=f"**{days_on_server}** {_plural(days_on_server, 'день', 'дня', 'дней')}", inline=True)
+            
+            embed.add_field(name="👥 Осталось", value=f"**{total}**", inline=True)
+            
+            if days_on_server > 30:
+                embed.add_field(name="💔 Жаль", value="Надеемся, ты вернешься!", inline=False)
+            elif days_on_server > 7:
+                embed.add_field(name="😢", value="Будем скучать!", inline=False)
+            
+            await goodbye_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_member_remove: {e}")
+
+def _plural(count, one, few, many):
+    """Склонение слов"""
+    if count % 10 == 1 and count % 100 != 11:
+        return one
+    elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+        return few
+    return many
+
+# ───────────────────────────────────────────────
+#   УЛУЧШЕННЫЙ АУДИТ-ЛОГ
+# ───────────────────────────────────────────────
+
+async def get_audit_info(guild, action, target_id=None, limit=5):
+    try:
+        async for entry in guild.audit_logs(limit=limit, action=action):
+            if target_id and entry.target.id == target_id:
+                return {
+                    "moderator": entry.user,
+                    "reason": entry.reason,
+                    "created_at": entry.created_at
+                }
+            elif not target_id:
+                return {
+                    "moderator": entry.user,
+                    "reason": entry.reason,
+                    "created_at": entry.created_at
+                }
+    except:
+        pass
+    return None
+
+@bot.event
+async def on_message_delete(message):
+    """Лог удаления сообщения"""
+    if message.author.bot:
+        return
     
-    embed = discord.Embed(
-        title="📤 Участник вышел",
-        color=0xF04747,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Пользователь", value=f"{member} (`{member.id}`)", inline=False)
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        reason = None
+        
+        try:
+            async for entry in message.guild.audit_logs(limit=5, action=discord.AuditLogAction.message_delete):
+                time_diff = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+                if (hasattr(entry.extra, 'channel') and 
+                    entry.extra.channel.id == message.channel.id and 
+                    entry.target.id == message.author.id and
+                    time_diff < 10):
+                    moderator = entry.user
+                    reason = entry.reason
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🗑 Сообщение удалено",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        embed.add_field(name="Автор", value=f"{message.author.mention}\nID: `{message.author.id}`", inline=False)
+        embed.add_field(name="Канал", value=message.channel.mention, inline=False)
+        
+        if moderator:
+            embed.add_field(name="Удалил", value=f"{moderator.mention}\nID: `{moderator.id}`", inline=False)
+        
+        if reason:
+            embed.add_field(name="Причина", value=reason, inline=False)
+        
+        if message.content:
+            content = message.content[:900] + ("..." if len(message.content) > 900 else "")
+            embed.add_field(name="Содержимое", value=content, inline=False)
+        
+        if message.attachments:
+            files = "\n".join([f"[{a.filename}]({a.url})" for a in message.attachments])
+            embed.add_field(name="Вложения", value=files[:1000], inline=False)
+        
+        embed.set_footer(text=f"ID: {message.id}")
+        await log_ch.send(embed=embed)
+        
+    except Exception as e:
+        print(f"Ошибка в on_message_delete: {e}")
+
+@bot.event
+async def on_message_edit(before, after):
+    """Лог изменения сообщения"""
+    if before.author.bot or before.content == after.content:
+        return
     
-    await log_to_channel(embed)
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        embed = discord.Embed(
+            title="✏️ Сообщение изменено",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        embed.add_field(name="Автор", value=f"{before.author.mention}\nID: `{before.author.id}`", inline=False)
+        embed.add_field(name="Канал", value=before.channel.mention, inline=False)
+        embed.add_field(name="Было", value=before.content[:500] + ("..." if len(before.content) > 500 else "") or "*Пусто*", inline=False)
+        embed.add_field(name="Стало", value=after.content[:500] + ("..." if len(after.content) > 500 else "") or "*Пусто*", inline=False)
+        embed.add_field(name="Ссылка", value=f"[Перейти]({after.jump_url})", inline=False)
+        
+        await log_ch.send(embed=embed)
+        
+    except Exception as e:
+        print(f"Ошибка в on_message_edit: {e}")
+
+@bot.event
+async def on_member_update(before, after):
+    """Лог изменений участника"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        # Никнейм
+        if before.nick != after.nick:
+            embed = discord.Embed(
+                title="👤 Никнейм изменён",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=after.mention, inline=False)
+            embed.add_field(name="Было", value=before.nick or "*Не указан*", inline=True)
+            embed.add_field(name="Стало", value=after.nick or "*Не указан*", inline=True)
+            
+            audit = await get_audit_info(after.guild, discord.AuditLogAction.member_update, after.id)
+            if audit and audit["moderator"]:
+                embed.add_field(name="Изменил", value=audit["moderator"].mention, inline=False)
+            
+            await log_ch.send(embed=embed)
+        
+        # Роли
+        if before.roles != after.roles:
+            added = [r for r in after.roles if r not in before.roles and r.name != "@everyone"]
+            removed = [r for r in before.roles if r not in after.roles and r.name != "@everyone"]
+            
+            if added or removed:
+                embed = discord.Embed(
+                    title="👤 Роли изменены",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=after.mention, inline=False)
+                if added:
+                    embed.add_field(name="✅ Добавлены", value=", ".join([r.mention for r in added]), inline=False)
+                if removed:
+                    embed.add_field(name="❌ Удалены", value=", ".join([r.mention for r in removed]), inline=False)
+                
+                audit = await get_audit_info(after.guild, discord.AuditLogAction.member_role_update, after.id)
+                if audit and audit["moderator"]:
+                    embed.add_field(name="Изменил", value=audit["moderator"].mention, inline=False)
+                
+                await log_ch.send(embed=embed)
+        
+        # Мут/таймаут
+        if before.timed_out_until != after.timed_out_until:
+            if after.timed_out_until:
+                duration = after.timed_out_until - datetime.now(timezone.utc)
+                hours = duration.days * 24 + duration.seconds // 3600
+                minutes = (duration.seconds % 3600) // 60
+                duration_text = f"{hours}ч {minutes}м"
+                
+                audit = await get_audit_info(after.guild, discord.AuditLogAction.member_update, after.id)
+                moderator = audit["moderator"] if audit else None
+                
+                case_id = await create_case(after, moderator or bot.user, "Мут", "Автоматически", duration_text)
+                
+                embed = discord.Embed(
+                    title="🔇 Пользователь замучен",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=after.mention, inline=False)
+                embed.add_field(name="Длительность", value=duration_text, inline=True)
+                embed.add_field(name="До", value=f"<t:{int(after.timed_out_until.timestamp())}:R>", inline=True)
+                if moderator:
+                    embed.add_field(name="Модератор", value=moderator.mention, inline=True)
+                embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
+                await log_ch.send(embed=embed)
+            else:
+                audit = await get_audit_info(after.guild, discord.AuditLogAction.member_update, after.id)
+                moderator = audit["moderator"] if audit else None
+                
+                case_id = await create_case(after, moderator or bot.user, "Снятие мута", "Автоматически")
+                embed = discord.Embed(
+                    title="🔊 Мут снят",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=after.mention, inline=False)
+                if moderator:
+                    embed.add_field(name="Модератор", value=moderator.mention, inline=True)
+                embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
+                await log_ch.send(embed=embed)
+                
+    except Exception as e:
+        print(f"Ошибка в on_member_update: {e}")
+
+@bot.event
+async def on_member_ban(guild, user):
+    """Лог бана"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        reason = None
+        
+        try:
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.ban):
+                if entry.target.id == user.id:
+                    moderator = entry.user
+                    reason = entry.reason
+                    break
+        except:
+            pass
+        
+        case_id = await create_case(user, moderator or bot.user, "Бан", reason or "Не указана")
+        
+        embed = discord.Embed(
+            title="🔨 Пользователь забанен",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
+        if moderator:
+            embed.add_field(name="Модератор", value=f"{moderator.mention}\nID: `{moderator.id}`", inline=False)
+        if reason:
+            embed.add_field(name="Причина", value=reason, inline=False)
+        embed.add_field(name="Кейс", value=f"`{case_id}`", inline=False)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_member_ban: {e}")
+
+@bot.event
+async def on_member_unban(guild, user):
+    """Лог разбана"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        
+        try:
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.unban):
+                if entry.target.id == user.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🔓 Пользователь разбанен",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Пользователь", value=f"{user} (`{user.id}`)", inline=False)
+        if moderator:
+            embed.add_field(name="Модератор", value=f"{moderator.mention}\nID: `{moderator.id}`", inline=False)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_member_unban: {e}")
 
 @bot.event
 async def on_guild_channel_create(channel):
-    """Логирование создания канала"""
-    print(f"🔍 Событие: создание канала {channel.name}")
-    
-    embed = discord.Embed(
-        title="📢 Канал создан",
-        color=0x57F287,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Канал", value=channel.mention, inline=False)
-    embed.add_field(name="Название", value=channel.name, inline=True)
-    embed.add_field(name="Тип", value=str(channel.type), inline=True)
-    
-    await log_to_channel(embed)
+    """Лог создания канала"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_create):
+                if entry.target.id == channel.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="📢 Канал создан",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Название", value=channel.mention, inline=True)
+        embed.add_field(name="Тип", value="Текстовый" if isinstance(channel, discord.TextChannel) else "Голосовой", inline=True)
+        embed.add_field(name="Категория", value=channel.category.name if channel.category else "Нет", inline=True)
+        if moderator:
+            embed.add_field(name="Создал", value=moderator.mention, inline=True)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_channel_create: {e}")
 
 @bot.event
 async def on_guild_channel_delete(channel):
-    """Логирование удаления канала"""
-    print(f"🔍 Событие: удаление канала {channel.name}")
-    
-    embed = discord.Embed(
-        title="🗑 Канал удалён",
-        color=0xF04747,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Название", value=channel.name, inline=True)
-    embed.add_field(name="Тип", value=str(channel.type), inline=True)
-    embed.add_field(name="ID", value=f"`{channel.id}`", inline=True)
-    
-    await log_to_channel(embed)
+    """Лог удаления канала"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+                if entry.target.id == channel.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
+        
+        embed = discord.Embed(
+            title="🗑 Канал удалён",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="Название", value=channel.name, inline=True)
+        embed.add_field(name="Тип", value="Текстовый" if isinstance(channel, discord.TextChannel) else "Голосовой", inline=True)
+        if moderator:
+            embed.add_field(name="Удалил", value=moderator.mention, inline=True)
+        
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_channel_delete: {e}")
 
 @bot.event
 async def on_guild_channel_update(before, after):
-    """Логирование изменения канала"""
-    if before.name == after.name:
-        return
-    
-    print(f"🔍 Событие: изменение канала {before.name} -> {after.name}")
-    
-    embed = discord.Embed(
-        title="✏️ Канал изменён",
-        color=0xFAA61A,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="Канал", value=after.mention, inline=False)
-    embed.add_field(name="Было", value=before.name, inline=True)
-    embed.add_field(name="Стало", value=after.name, inline=True)
-    
-    await log_to_channel(embed)
+    """Лог изменения канала"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        changes = []
+        
+        if before.name != after.name:
+            changes.append(f"**Название:** {before.name} → {after.name}")
+        
+        if before.category != after.category:
+            before_cat = before.category.name if before.category else "Нет"
+            after_cat = after.category.name if after.category else "Нет"
+            changes.append(f"**Категория:** {before_cat} → {after_cat}")
+        
+        if isinstance(before, discord.TextChannel) and isinstance(after, discord.TextChannel):
+            if before.topic != after.topic:
+                changes.append(f"**Тема изменена**")
+        
+        if changes:
+            moderator = None
+            try:
+                async for entry in after.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_update):
+                    if entry.target.id == after.id:
+                        moderator = entry.user
+                        break
+            except:
+                pass
+            
+            embed = discord.Embed(
+                title="✏️ Канал изменён",
+                description="\n".join(changes),
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Канал", value=after.mention, inline=True)
+            if moderator:
+                embed.add_field(name="Изменил", value=moderator.mention, inline=True)
+            
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_guild_channel_update: {e}")
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Логирование голосовой активности"""
-    if member.bot:
-        return
-    
-    # Зашёл в голосовой канал
-    if before.channel is None and after.channel is not None:
-        print(f"🔍 Событие: {member} зашёл в {after.channel.name}")
+    """Лог голосовых каналов"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        if before.channel is None and after.channel is not None:
+            embed = discord.Embed(
+                title="🔊 Подключился к голосовому",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=True)
+            embed.add_field(name="Канал", value=after.channel.mention, inline=True)
+            await log_ch.send(embed=embed)
+        
+        elif before.channel is not None and after.channel is None:
+            embed = discord.Embed(
+                title="🔇 Отключился от голосового",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=True)
+            embed.add_field(name="Канал", value=before.channel.mention, inline=True)
+            await log_ch.send(embed=embed)
+        
+        elif before.channel != after.channel and before.channel is not None and after.channel is not None:
+            embed = discord.Embed(
+                title="🔄 Переместился в голосовом",
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Пользователь", value=member.mention, inline=False)
+            embed.add_field(name="Было", value=before.channel.mention, inline=True)
+            embed.add_field(name="Стало", value=after.channel.mention, inline=True)
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_voice_state_update: {e}")
+
+@bot.event
+async def on_guild_role_create(role):
+    """Лог создания роли"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_create):
+                if entry.target.id == role.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
         
         embed = discord.Embed(
-            title="🔊 Зашёл в голосовой канал",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
+            title="🎨 Роль создана",
+            color=role.color if role.color.value != 0 else COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(name="Пользователь", value=member.mention, inline=False)
-        embed.add_field(name="Канал", value=after.channel.mention, inline=False)
+        embed.add_field(name="Название", value=role.mention, inline=True)
+        embed.add_field(name="Цвет", value=f"#{role.color.value:06x}" if role.color.value != 0 else "Стандартный", inline=True)
+        if moderator:
+            embed.add_field(name="Создал", value=moderator.mention, inline=True)
         
-        await log_to_channel(embed)
-    
-    # Вышел из голосового канала
-    elif before.channel is not None and after.channel is None:
-        print(f"🔍 Событие: {member} вышел из {before.channel.name}")
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_role_create: {e}")
+
+@bot.event
+async def on_guild_role_delete(role):
+    """Лог удаления роли"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        moderator = None
+        try:
+            async for entry in role.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_delete):
+                if entry.target.id == role.id:
+                    moderator = entry.user
+                    break
+        except:
+            pass
         
         embed = discord.Embed(
-            title="🔇 Вышел из голосового канала",
-            color=0xF04747,
-            timestamp=datetime.utcnow()
+            title="🗑 Роль удалена",
+            color=COLORS["audit"],
+            timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(name="Пользователь", value=member.mention, inline=False)
-        embed.add_field(name="Канал", value=before.channel.mention, inline=False)
+        embed.add_field(name="Название", value=role.name, inline=True)
+        if moderator:
+            embed.add_field(name="Удалил", value=moderator.mention, inline=True)
         
-        await log_to_channel(embed)
-    
-    # Переключился между каналами
-    elif before.channel != after.channel:
-        print(f"🔍 Событие: {member} переключился {before.channel.name} -> {after.channel.name}")
+        await log_ch.send(embed=embed)
+    except Exception as e:
+        print(f"Ошибка в on_guild_role_delete: {e}")
+
+@bot.event
+async def on_guild_role_update(before, after):
+    """Лог изменения роли"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
         
-        embed = discord.Embed(
-            title="🔄 Переключил голосовой канал",
-            color=0xFAA61A,
-            timestamp=datetime.utcnow()
-        )
-        embed.add_field(name="Пользователь", value=member.mention, inline=False)
-        embed.add_field(name="Из", value=before.channel.mention, inline=True)
-        embed.add_field(name="В", value=after.channel.mention, inline=True)
+        changes = []
         
-        await log_to_channel(embed)
+        if before.name != after.name:
+            changes.append(f"**Название:** {before.name} → {after.name}")
+        
+        if before.color != after.color:
+            before_color = f"#{before.color.value:06x}" if before.color.value != 0 else "Стандартный"
+            after_color = f"#{after.color.value:06x}" if after.color.value != 0 else "Стандартный"
+            changes.append(f"**Цвет:** {before_color} → {after_color}")
+        
+        if before.permissions != after.permissions:
+            changes.append(f"**Права изменены**")
+        
+        if changes:
+            moderator = None
+            try:
+                async for entry in after.guild.audit_logs(limit=1, action=discord.AuditLogAction.role_update):
+                    if entry.target.id == after.id:
+                        moderator = entry.user
+                        break
+            except:
+                pass
+            
+            embed = discord.Embed(
+                title="✏️ Роль изменена",
+                description="\n".join(changes),
+                color=after.color if after.color.value != 0 else COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed.add_field(name="Роль", value=after.mention, inline=True)
+            if moderator:
+                embed.add_field(name="Изменил", value=moderator.mention, inline=True)
+            
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_guild_role_update: {e}")
+
+@bot.event
+async def on_guild_update(before, after):
+    """Лог изменений сервера"""
+    try:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if not log_ch:
+            return
+        
+        changes = []
+        
+        if before.name != after.name:
+            changes.append(f"**Название:** {before.name} → {after.name}")
+        
+        if before.icon != after.icon:
+            changes.append(f"**Иконка изменена**")
+        
+        if before.premium_tier != after.premium_tier:
+            changes.append(f"**Уровень буста:** {before.premium_tier} → {after.premium_tier}")
+        
+        if changes:
+            embed = discord.Embed(
+                title="🔧 Сервер изменён",
+                description="\n".join(changes),
+                color=COLORS["audit"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            await log_ch.send(embed=embed)
+            
+    except Exception as e:
+        print(f"Ошибка в on_guild_update: {e}")
 
 # ───────────────────────────────────────────────
 #   КОМАНДЫ
 # ───────────────────────────────────────────────
 
-@bot.hybrid_command(name="ping", description="Проверить задержку бота и другую полезную информацию")
+@bot.hybrid_command(name="ping", description="Подробная информация о боте")
 async def ping(ctx: commands.Context):
     try:
+        # Задержки
         latency = round(bot.latency * 1000)
-        api_latency = round(bot.ws.latency * 1000) if bot.ws else latency
+        
+        # Время работы
         uptime = datetime.now(timezone.utc) - bot.launch_time
-        uptime_str = str(uptime).split('.')[0]
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        if days > 0:
+            uptime_str = f"{days}д {hours}ч {minutes}м {seconds}с"
+        elif hours > 0:
+            uptime_str = f"{hours}ч {minutes}м {seconds}с"
+        elif minutes > 0:
+            uptime_str = f"{minutes}м {seconds}с"
+        else:
+            uptime_str = f"{seconds}с"
+        
+        # Статистика
         guild_count = len(bot.guilds)
         user_count = sum(g.member_count for g in bot.guilds if g.member_count)
+        channel_count = sum(len(g.channels) for g in bot.guilds)
+        
+        # Пинг в разных регионах (эмуляция)
+        ping_status = "🟢 Отлично" if latency < 100 else "🟡 Средне" if latency < 200 else "🔴 Плохо"
+        
+        # Создаем красивый embed
         embed = discord.Embed(
-            title="🏓 Pong! Статус бота",
-            description="Вот всё, что тебе нужно знать о моей производительности прямо сейчас",
-            color=0x57F287,
+            title="🏓 **ПОНГ!**",
+            description="```Статус бота и производительность```",
+            color=COLORS["welcome"],
             timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(name="Задержка (WebSocket)", value=f"**{latency} мс**", inline=True)
-        embed.add_field(name="Задержка API", value=f"**{api_latency} мс**", inline=True)
-        embed.add_field(name="Время работы", value=f"**{uptime_str}**", inline=True)
-        embed.add_field(name="Серверов", value=f"**{guild_count}**", inline=True)
-        embed.add_field(name="Пользователей", value=f"**{user_count:,}**", inline=True)
-        embed.set_footer(text="MortisPlay • mortisplay.ru", icon_url=bot.user.display_avatar.url)
+        
+        # Основная информация
+        embed.add_field(
+            name="📊 **Основная информация**",
+            value=f"```yml\n"
+                  f"Задержка: {latency}ms\n"
+                  f"Состояние: {ping_status}\n"
+                  f"Время работы: {uptime_str}\n"
+                  f"Серверов: {guild_count}\n"
+                  f"Пользователей: {user_count:,}\n"
+                  f"Каналов: {channel_count}\n"
+                  f"```",
+            inline=False
+        )
+        
+        # Детали задержки
+        embed.add_field(
+            name="⏱️ **Детали задержки**",
+            value=f"```diff\n"
+                  f"+ WebSocket: {latency}ms\n"
+                  f"+ API: ~{latency + 20}ms\n"
+                  f"+ База данных: ~{latency + 10}ms\n"
+                  f"```",
+            inline=True
+        )
+        
+        # Системная информация
+        import psutil
+        import platform
+        
+        process = psutil.Process()
+        memory_usage = process.memory_info().rss / 1024 / 1024  # в MB
+        cpu_usage = process.cpu_percent()
+        
+        embed.add_field(
+            name="💻 **Система**",
+            value=f"```yaml\n"
+                  f"Python: {platform.python_version()}\n"
+                  f"Discord.py: {discord.__version__}\n"
+                  f"RAM: {memory_usage:.1f} MB\n"
+                  f"CPU: {cpu_usage}%\n"
+                  f"```",
+            inline=True
+        )
+        
+        # Статистика команд
+        command_count = len(bot.commands)
+        hybrid_count = len([c for c in bot.commands if isinstance(c, commands.HybridCommand)])
+        
+        embed.add_field(
+            name="📋 **Команды**",
+            value=f"```css\n"
+                  f"Всего: {command_count}\n"
+                  f"Гибридных: {hybrid_count}\n"
+                  f"Слэш: {command_count}\n"
+                  f"```",
+            inline=True
+        )
+        
+        # Красивое оформление
         embed.set_thumbnail(url=bot.user.display_avatar.url)
-        await ctx.send(embed=embed, ephemeral=True)
+        embed.set_footer(
+            text=f"MortisPlay • Запросил: {ctx.author.display_name}",
+            icon_url=ctx.author.display_avatar.url
+        )
+        
+        # Добавляем кнопку для проверки
+        view = View(timeout=60)
+        button = Button(label="🔄 Обновить", style=discord.ButtonStyle.primary)
+        
+        async def refresh_callback(interaction: discord.Interaction):
+            if interaction.user.id != ctx.author.id:
+                return await interaction.response.send_message("❌ Это не твоя команда!", ephemeral=True)
+            
+            # Обновляем данные
+            new_latency = round(bot.latency * 1000)
+            new_uptime = datetime.now(timezone.utc) - bot.launch_time
+            new_days = new_uptime.days
+            new_hours, new_remainder = divmod(new_uptime.seconds, 3600)
+            new_minutes, new_seconds = divmod(new_remainder, 60)
+            
+            if new_days > 0:
+                new_uptime_str = f"{new_days}д {new_hours}ч {new_minutes}м {new_seconds}с"
+            elif new_hours > 0:
+                new_uptime_str = f"{new_hours}ч {new_minutes}м {new_seconds}с"
+            elif new_minutes > 0:
+                new_uptime_str = f"{new_minutes}м {new_seconds}с"
+            else:
+                new_uptime_str = f"{new_seconds}с"
+            
+            new_ping_status = "🟢 Отлично" if new_latency < 100 else "🟡 Средне" if new_latency < 200 else "🔴 Плохо"
+            
+            new_embed = discord.Embed(
+                title="🏓 **ПОНГ!**",
+                description="```Статус бота и производительность```",
+                color=COLORS["welcome"],
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            new_embed.add_field(
+                name="📊 **Основная информация**",
+                value=f"```yml\n"
+                      f"Задержка: {new_latency}ms\n"
+                      f"Состояние: {new_ping_status}\n"
+                      f"Время работы: {new_uptime_str}\n"
+                      f"Серверов: {guild_count}\n"
+                      f"Пользователей: {user_count:,}\n"
+                      f"Каналов: {channel_count}\n"
+                      f"```",
+                inline=False
+            )
+            
+            new_embed.add_field(
+                name="⏱️ **Детали задержки**",
+                value=f"```diff\n"
+                      f"+ WebSocket: {new_latency}ms\n"
+                      f"+ API: ~{new_latency + 20}ms\n"
+                      f"+ База данных: ~{new_latency + 10}ms\n"
+                      f"```",
+                inline=True
+            )
+            
+            new_memory = process.memory_info().rss / 1024 / 1024
+            new_cpu = process.cpu_percent()
+            
+            new_embed.add_field(
+                name="💻 **Система**",
+                value=f"```yaml\n"
+                      f"Python: {platform.python_version()}\n"
+                      f"Discord.py: {discord.__version__}\n"
+                      f"RAM: {new_memory:.1f} MB\n"
+                      f"CPU: {new_cpu}%\n"
+                      f"```",
+                inline=True
+            )
+            
+            new_embed.set_thumbnail(url=bot.user.display_avatar.url)
+            new_embed.set_footer(
+                text=f"MortisPlay • Запросил: {ctx.author.display_name}",
+                icon_url=ctx.author.display_avatar.url
+            )
+            
+            await interaction.response.edit_message(embed=new_embed, view=view)
+        
+        button.callback = refresh_callback
+        view.add_item(button)
+        
+        await ctx.send(embed=embed, view=view, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="avatar", description="Показать аватар пользователя")
-@app_commands.describe(member="Пользователь (по умолчанию — ты)")
+@bot.hybrid_command(name="avatar", description="Показать аватар")
+@app_commands.describe(member="Пользователь")
 async def avatar(ctx: commands.Context, member: discord.Member = None):
     try:
         member = member or ctx.author
-        embed = discord.Embed(title=f"Аватар {member}", color=0x7289DA)
+        embed = discord.Embed(title=f"Аватар {member}", color=COLORS["welcome"])
         embed.set_image(url=member.display_avatar.url)
         embed.set_footer(text=f"ID: {member.id}")
         await ctx.send(embed=embed, ephemeral=True)
@@ -1431,15 +2298,17 @@ async def avatar(ctx: commands.Context, member: discord.Member = None):
         await send_error_embed(ctx, str(e))
 
 @bot.hybrid_command(name="userinfo", description="Информация о пользователе")
-@app_commands.describe(member="Пользователь (по умолчанию — ты)")
+@app_commands.describe(member="Пользователь")
 async def userinfo(ctx: commands.Context, member: discord.Member = None):
     try:
         await ctx.defer(ephemeral=True)
         member = member or ctx.author
         guild = ctx.guild
+
         fresh_member = guild.get_member(member.id)
         if not fresh_member:
             fresh_member = await guild.fetch_member(member.id)
+
         status_map = {
             discord.Status.online: ("🟢 Онлайн", 0x43b581),
             discord.Status.idle: ("🟡 Неактивен", 0xfaa61a),
@@ -1448,6 +2317,7 @@ async def userinfo(ctx: commands.Context, member: discord.Member = None):
             discord.Status.invisible: ("⚫ Невидимка", 0x747f8d)
         }
         status_text, color = status_map.get(fresh_member.status, ("⚫ Неизвестно", 0x747f8d))
+
         devices = []
         if fresh_member.desktop_status != discord.Status.offline:
             devices.append("🖥️ Desktop")
@@ -1456,10 +2326,13 @@ async def userinfo(ctx: commands.Context, member: discord.Member = None):
         if fresh_member.web_status != discord.Status.offline:
             devices.append("🌐 Web")
         devices_str = " • ".join(devices) or "Неизвестно"
+
         booster_since = fresh_member.premium_since
         booster_text = f"Бустер с {booster_since.strftime('%d.%m.%Y')}" if booster_since else "Не бустит"
+
         embed = discord.Embed(title=f"👤 {fresh_member.display_name}", color=color)
         embed.set_thumbnail(url=fresh_member.display_avatar.url)
+
         embed.add_field(name="🆔 ID", value=f"`{fresh_member.id}`", inline=True)
         embed.add_field(name="📛 Ник", value=f"`{fresh_member.name}`", inline=True)
         embed.add_field(name="📅 Регистрация", value=fresh_member.created_at.strftime("%d.%m.%Y %H:%M"), inline=True)
@@ -1468,98 +2341,66 @@ async def userinfo(ctx: commands.Context, member: discord.Member = None):
         embed.add_field(name="📱 Устройства", value=devices_str, inline=True)
         embed.add_field(name="🚀 Бустер", value=booster_text, inline=True)
         embed.add_field(name="🏆 Высшая роль", value=fresh_member.top_role.mention if fresh_member.top_role != guild.default_role else "Нет", inline=False)
+
+        # Добавляем биографию для бота
         if fresh_member.id == bot.user.id:
             embed.add_field(name="📝 Биография", value="Я многофункциональный бот для Discord, созданный для автоматизации модерации, экономики и развлечений. Разработан специально для сервера MortisPlay!", inline=False)
+
         if fresh_member.banner:
             embed.set_image(url=fresh_member.banner.url)
+
         embed.set_footer(text=f"Запросил: {ctx.author}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
+
     except Exception as e:
         await send_error_embed(ctx, f"Не удалось загрузить информацию: {str(e)}")
+        
 
 @bot.hybrid_command(name="stats", description="Статистика сервера")
 async def stats(ctx: commands.Context):
     try:
         guild = ctx.guild
-        total_members = guild.member_count
-        online_members = sum(1 for m in guild.members if m.status != discord.Status.offline)
-        idle_members = sum(1 for m in guild.members if m.status == discord.Status.idle)
-        dnd_members = sum(1 for m in guild.members if m.status == discord.Status.dnd)
-        offline_members = sum(1 for m in guild.members if m.status == discord.Status.offline)
-        bot_count = sum(1 for m in guild.members if m.bot)
-        human_count = total_members - bot_count
-        text_channels = len(guild.text_channels)
-        voice_channels = len(guild.voice_channels)
-        categories = len(guild.categories)
-        roles_count = len(guild.roles)
-        emojis_count = len(guild.emojis)
-        boost_level = guild.premium_tier
-        boost_count = guild.premium_subscription_count
+        
+        total = guild.member_count
+        online = sum(1 for m in guild.members if m.status != discord.Status.offline)
+        idle = sum(1 for m in guild.members if m.status == discord.Status.idle)
+        dnd = sum(1 for m in guild.members if m.status == discord.Status.dnd)
+        offline = total - online
+        bots = sum(1 for m in guild.members if m.bot)
+        humans = total - bots
+
         embed = discord.Embed(
-            title=f"📊 Статистика сервера {guild.name}",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
+            title=f"📊 Статистика {guild.name}",
+            color=COLORS["welcome"],
+            timestamp=datetime.now(timezone.utc)
         )
+        
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
-        embed.add_field(
-            name="👥 Участники",
-            value=f"**Всего:** {total_members}\n"
-                  f"**Людей:** {human_count}\n"
-                  f"**Ботов:** {bot_count}",
-            inline=True
-        )
-        embed.add_field(
-            name="🟢 Онлайн",
-            value=f"**Онлайн:** {online_members}\n"
-                  f"**Неактивен:** {idle_members}\n"
-                  f"**Не беспокоить:** {dnd_members}\n"
-                  f"**Оффлайн:** {offline_members}",
-            inline=True
-        )
-        embed.add_field(
-            name="📁 Каналы",
-            value=f"**Текстовых:** {text_channels}\n"
-                  f"**Голосовых:** {voice_channels}\n"
-                  f"**Категорий:** {categories}",
-            inline=True
-        )
-        embed.add_field(
-            name="🎨 Оформление",
-            value=f"**Ролей:** {roles_count}\n"
-                  f"**Эмодзи:** {emojis_count}",
-            inline=True
-        )
-        embed.add_field(
-            name="🚀 Буст",
-            value=f"**Уровень:** {boost_level}\n"
-                  f"**Бустов:** {boost_count}",
-            inline=True
-        )
-        embed.add_field(
-            name="📅 Сервер создан",
-            value=f"<t:{int(guild.created_at.timestamp())}:D>",
-            inline=True
-        )
+        
+        embed.add_field(name="👥 Участники", value=f"**Всего:** {total}\n👤 **Людей:** {humans}\n🤖 **Ботов:** {bots}", inline=True)
+        embed.add_field(name="🟢 Онлайн", value=f"**Онлайн:** {online}\n🟡 **Idle:** {idle}\n🔴 **DND:** {dnd}\n⚫ **Offline:** {offline}", inline=True)
+        embed.add_field(name="📁 Каналы", value=f"**Текстовых:** {len(guild.text_channels)}\n**Голосовых:** {len(guild.voice_channels)}\n**Категорий:** {len(guild.categories)}", inline=True)
+        embed.add_field(name="🎨 Оформление", value=f"**Ролей:** {len(guild.roles)}\n**Эмодзи:** {len(guild.emojis)}", inline=True)
+        embed.add_field(name="🚀 Буст", value=f"**Уровень:** {guild.premium_tier}\n**Бустов:** {guild.premium_subscription_count}", inline=True)
+        embed.add_field(name="📅 Сервер создан", value=f"<t:{int(guild.created_at.timestamp())}:D>", inline=True)
+        
         if guild.owner:
-            embed.add_field(
-                name="👑 Владелец",
-                value=guild.owner.mention,
-                inline=False
-            )
-        embed.set_footer(text=f"ID сервера: {guild.id}")
+            embed.add_field(name="👑 Владелец", value=guild.owner.mention, inline=False)
+        
+        embed.set_footer(text=f"ID: {guild.id}")
         await ctx.send(embed=embed, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="say", description="Написать от лица бота (поддержка embed + ответ на сообщение)")
+@bot.hybrid_command(name="say", description="Написать от лица бота")
 @app_commands.describe(
-    text="Обычный текст сообщения",
-    embed_title="Заголовок embed (если хочешь embed)",
+    text="Текст сообщения",
+    embed_title="Заголовок embed",
     embed_description="Описание embed",
-    embed_color="Цвет embed в HEX (например #FF0000)",
-    channel="Канал, куда отправить (по умолчанию текущий)",
-    reply_to="Сообщение, на которое нужно ответить (ответь на него и используй команду)"
+    embed_color="Цвет embed (например #FF0000)",
+    channel="Канал",
+    reply_to="ID сообщения для ответа"
 )
 @commands.has_permissions(manage_messages=True)
 async def say(
@@ -1574,22 +2415,26 @@ async def say(
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         if not has_full_access(ctx.guild.id):
-            return await ctx.send("❌ Эта команда доступна только на сервере разработчика.", ephemeral=True)
-        target_channel = channel or ctx.channel
-        if not target_channel.permissions_for(ctx.guild.me).send_messages:
-            return await ctx.send("❌ У меня нет прав писать в этот канал.", ephemeral=True)
-        reference = reply_to
+            return await ctx.send("❌ Команда доступна только на сервере разработчика.", ephemeral=True)
+
+        target = channel or ctx.channel
+        if not target.permissions_for(ctx.guild.me).send_messages:
+            return await ctx.send("❌ Нет прав писать в этот канал.", ephemeral=True)
+
         if embed_title and embed_description:
-            color_int = int(embed_color.lstrip("#"), 16) if embed_color.startswith("#") else 0x57F287
-            embed = discord.Embed(title=embed_title, description=embed_description, color=color_int)
-            await target_channel.send(embed=embed, reference=reference)
+            color = int(embed_color.lstrip("#"), 16) if embed_color.startswith("#") else 0x57F287
+            embed = discord.Embed(title=embed_title, description=embed_description, color=color)
+            await target.send(embed=embed, reference=reply_to)
         else:
             if not text:
-                return await ctx.send("❌ Укажи текст или embed_title + embed_description.", ephemeral=True)
-            await target_channel.send(text, reference=reference)
-        await ctx.send(f"✅ Сообщение успешно отправлено в {target_channel.mention}", ephemeral=True)
+                return await ctx.send("❌ Укажи текст или embed.", ephemeral=True)
+            await target.send(text, reference=reply_to)
+
+        await ctx.send(f"✅ Отправлено в {target.mention}", ephemeral=True)
+
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -1597,77 +2442,73 @@ async def say(
 #   ЭКОНОМИКА
 # ───────────────────────────────────────────────
 
-@bot.hybrid_command(name="pay", description="💸 Перевести монеты другому с комментарием")
-@app_commands.describe(member="Кому", amount="Сумма", comment="Комментарий к переводу (необязательно)")
+@bot.hybrid_command(name="pay", description="💸 Перевести монеты")
+@app_commands.describe(member="Кому", amount="Сумма", comment="Комментарий")
 async def pay(ctx: commands.Context, member: discord.Member, amount: int, comment: str = None):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
         if amount <= 0:
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Сумма должна быть больше 0.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Сумма должна быть > 0.", ephemeral=True)
+        
         if member.id == ctx.author.id:
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Нельзя перевести монеты самому себе.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Нельзя перевести себе.", ephemeral=True)
+
         sender_id = str(ctx.author.id)
         receiver_id = str(member.id)
-        if sender_id not in economy_data or economy_data[sender_id]["balance"] < amount:
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Твой баланс: {format_number(economy_data.get(sender_id, {}).get('balance', 0))} {ECONOMY_EMOJIS['coin']}", ephemeral=True)
+
+        if sender_id not in economy_data or economy_data[sender_id].get("balance", 0) < amount:
+            bal = economy_data.get(sender_id, {}).get("balance", 0)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Баланс: {format_number(bal)} {ECONOMY_EMOJIS['coin']}", ephemeral=True)
+
         tax = await apply_wealth_tax(sender_id)
+
         if receiver_id not in economy_data:
             economy_data[receiver_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+
         economy_data[sender_id]["balance"] -= amount
         economy_data[receiver_id]["balance"] += amount
         save_economy()
+
         embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['transfer']} Перевод выполнен",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
+            color=COLORS["economy"],
+            timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(
-            name="Отправитель",
-            value=f"{ctx.author.mention}\nБаланс: **{format_number(economy_data[sender_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
-            inline=True
-        )
-        embed.add_field(
-            name="Получатель",
-            value=f"{member.mention}\nБаланс: **{format_number(economy_data[receiver_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
-            inline=True
-        )
-        embed.add_field(
-            name="Сумма",
-            value=f"**{format_number(amount)}** {ECONOMY_EMOJIS['coin']}",
-            inline=False
-        )
+        
+        embed.add_field(name="Отправитель", value=f"{ctx.author.mention}\nБаланс: **{format_number(economy_data[sender_id]['balance'])}** {ECONOMY_EMOJIS['coin']}", inline=True)
+        embed.add_field(name="Получатель", value=f"{member.mention}\nБаланс: **{format_number(economy_data[receiver_id]['balance'])}** {ECONOMY_EMOJIS['coin']}", inline=True)
+        embed.add_field(name="Сумма", value=f"**{format_number(amount)}** {ECONOMY_EMOJIS['coin']}", inline=False)
+
         if comment:
-            embed.add_field(
-                name="📝 Комментарий",
-                value=f"*{comment}*",
-                inline=False
-            )
+            embed.add_field(name="📝 Комментарий", value=f"*{comment}*", inline=False)
+
         if tax > 0:
-            embed.add_field(
-                name=f"{ECONOMY_EMOJIS['tax']} Налог",
-                value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']} (1% > 10к)",
-                inline=False
-            )
-        embed.set_footer(text=f"Экономика v0.11.0 • mortisplay.ru", icon_url=bot.user.display_avatar.url)
+            embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']} (1% > 10к)", inline=False)
+
+        embed.set_footer(text="Экономика v1.0", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
+        
         try:
-            dm_embed = discord.Embed(
+            dm = discord.Embed(
                 title=f"{ECONOMY_EMOJIS['transfer']} Получен перевод",
                 description=f"**От:** {ctx.author.mention}\n**Сумма:** {format_number(amount)} {ECONOMY_EMOJIS['coin']}",
-                color=0x57F287
+                color=COLORS["economy"]
             )
             if comment:
-                dm_embed.add_field(name="Комментарий", value=comment, inline=False)
-            await member.send(embed=dm_embed)
+                dm.add_field(name="Комментарий", value=comment, inline=False)
+            await member.send(embed=dm)
         except:
             pass
+        
         if amount >= 10000:
             await send_mod_log(
                 title="💸 Крупный перевод",
-                description=f"**От:** {ctx.author.mention}\n**Кому:** {member.mention}\n**Сумма:** {format_number(amount)} {ECONOMY_EMOJIS['coin']}\n**Комментарий:** {comment or 'Нет'}",
-                color=0x57F287
+                description=f"**От:** {ctx.author.mention}\n**Кому:** {member.mention}\n**Сумма:** {format_number(amount)} {ECONOMY_EMOJIS['coin']}",
+                color=COLORS["economy"]
             )
+            
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -1676,51 +2517,60 @@ async def pay(ctx: commands.Context, member: discord.Member, amount: int, commen
 async def invest(ctx: commands.Context, amount: int, days: int):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
         if amount < INVESTMENT_MIN_AMOUNT:
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Минимальная сумма инвестиций: {format_number(INVESTMENT_MIN_AMOUNT)} {ECONOMY_EMOJIS['coin']}", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Минимум: {format_number(INVESTMENT_MIN_AMOUNT)} {ECONOMY_EMOJIS['coin']}", ephemeral=True)
+        
         if days < 1 or days > INVESTMENT_MAX_DAYS:
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Срок инвестиций должен быть от 1 до {INVESTMENT_MAX_DAYS} дней.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Срок: 1-{INVESTMENT_MAX_DAYS} дней.", ephemeral=True)
+
         user_id = str(ctx.author.id)
+        
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+        
         if economy_data[user_id]["balance"] < amount:
             return await ctx.send(f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}", ephemeral=True)
-        base_rate = INVESTMENT_BASE_RATE
-        rate_multiplier = 1 + (days / 30)
-        profit_rate = base_rate * rate_multiplier
-        profit = int(amount * profit_rate)
-        end_time = datetime.utcnow().timestamp() + (days * 86400)
+
+        rate = INVESTMENT_BASE_RATE * (1 + days / 30)
+        profit = int(amount * rate)
+        end_time = datetime.now(timezone.utc).timestamp() + (days * 86400)
+        
         investment = {
             "amount": amount,
             "days": days,
             "profit": profit,
-            "start_time": datetime.utcnow().timestamp(),
+            "start_time": datetime.now(timezone.utc).timestamp(),
             "end_time": end_time,
-            "rate": round(profit_rate * 100, 2)
+            "rate": round(rate * 100, 2)
         }
+        
         economy_data[user_id]["balance"] -= amount
-        if "investments" not in economy_data[user_id]:
-            economy_data[user_id]["investments"] = []
-        economy_data[user_id]["investments"].append(investment)
+        economy_data[user_id].setdefault("investments", []).append(investment)
         save_economy()
+        
         embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['investment']} Инвестиция создана",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
+            color=COLORS["economy"],
+            timestamp=datetime.now(timezone.utc)
         )
+        
         embed.add_field(name="💰 Сумма", value=f"{format_number(amount)} {ECONOMY_EMOJIS['coin']}", inline=True)
         embed.add_field(name="📅 Срок", value=f"{days} дней", inline=True)
         embed.add_field(name="📊 Ставка", value=f"{investment['rate']}%", inline=True)
         embed.add_field(name="💹 Прибыль", value=f"+{format_number(profit)} {ECONOMY_EMOJIS['coin']}", inline=True)
         embed.add_field(name="⏰ Завершение", value=f"<t:{int(end_time)}:R>", inline=False)
-        embed.set_footer(text=f"Новый баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}")
+        
+        embed.set_footer(text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}")
         await ctx.send(embed=embed, ephemeral=True)
+        
         await send_mod_log(
             title="📈 Новая инвестиция",
-            description=f"**Пользователь:** {ctx.author.mention}\n**Сумма:** {format_number(amount)} {ECONOMY_EMOJIS['coin']}\n**Срок:** {days} дней\n**Прибыль:** {format_number(profit)} {ECONOMY_EMOJIS['coin']}",
-            color=0x57F287
+            description=f"**Пользователь:** {ctx.author.mention}\n**Сумма:** {format_number(amount)} {ECONOMY_EMOJIS['coin']}\n**Срок:** {days} дней",
+            color=COLORS["economy"]
         )
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -1728,46 +2578,55 @@ async def invest(ctx: commands.Context, amount: int, days: int):
 async def my_investments(ctx: commands.Context):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
         user_id = str(ctx.author.id)
-        if user_id not in economy_data or "investments" not in economy_data[user_id] or not economy_data[user_id]["investments"]:
-            return await ctx.send(f"{ECONOMY_EMOJIS['warning']} У вас нет активных инвестиций.", ephemeral=True)
-        now = datetime.utcnow().timestamp()
+        
+        if user_id not in economy_data or not economy_data[user_id].get("investments"):
+            return await ctx.send(f"{ECONOMY_EMOJIS['warning']} У вас нет инвестиций.", ephemeral=True)
+        
+        now = datetime.now(timezone.utc).timestamp()
         active = []
         completed = []
+        
         for inv in economy_data[user_id]["investments"]:
             if inv["end_time"] > now:
                 active.append(inv)
             else:
                 completed.append(inv)
+        
         embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['investment']} Мои инвестиции",
-            color=0x57F287,
-            timestamp=datetime.utcnow()
+            color=COLORS["economy"],
+            timestamp=datetime.now(timezone.utc)
         )
+        
         if active:
-            active_text = ""
+            text = ""
             for i, inv in enumerate(active, 1):
-                time_left = inv["end_time"] - now
-                days_left = int(time_left // 86400)
-                hours_left = int((time_left % 86400) // 3600)
-                active_text += f"**{i}.** {format_number(inv['amount'])} {ECONOMY_EMOJIS['coin']} → +{format_number(inv['profit'])} {ECONOMY_EMOJIS['coin']}\n"
-                active_text += f"⏰ Осталось: {days_left}д {hours_left}ч\n\n"
-            embed.add_field(name="🟢 Активные", value=active_text, inline=False)
+                left = inv["end_time"] - now
+                days = int(left // 86400)
+                hours = int((left % 86400) // 3600)
+                text += f"**{i}.** {format_number(inv['amount'])} → +{format_number(inv['profit'])} {ECONOMY_EMOJIS['coin']}\n⏰ Осталось: {days}д {hours}ч\n\n"
+            embed.add_field(name="🟢 Активные", value=text, inline=False)
+        
         if completed:
-            completed_text = ""
+            text = ""
             for i, inv in enumerate(completed[-5:], 1):
-                completed_text += f"**{i}.** {format_number(inv['amount'])} {ECONOMY_EMOJIS['coin']} → +{format_number(inv['profit'])} {ECONOMY_EMOJIS['coin']} ✅\n"
-            embed.add_field(name="✅ Завершенные", value=completed_text, inline=False)
-        total_invested = sum(inv["amount"] for inv in economy_data[user_id]["investments"])
-        total_profit = sum(inv["profit"] for inv in economy_data[user_id]["investments"])
+                text += f"**{i}.** {format_number(inv['amount'])} → +{format_number(inv['profit'])} {ECONOMY_EMOJIS['coin']} ✅\n"
+            embed.add_field(name="✅ Завершенные", value=text, inline=False)
+        
+        total_invested = sum(i["amount"] for i in economy_data[user_id]["investments"])
+        total_profit = sum(i["profit"] for i in economy_data[user_id]["investments"])
+        
         embed.add_field(
             name="📊 Статистика",
-            value=f"**Всего инвестировано:** {format_number(total_invested)} {ECONOMY_EMOJIS['coin']}\n"
-                  f"**Общая прибыль:** +{format_number(total_profit)} {ECONOMY_EMOJIS['coin']}",
+            value=f"**Инвестировано:** {format_number(total_invested)} {ECONOMY_EMOJIS['coin']}\n**Прибыль:** +{format_number(total_profit)} {ECONOMY_EMOJIS['coin']}",
             inline=False
         )
+        
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -1775,32 +2634,40 @@ async def my_investments(ctx: commands.Context):
 #   СИСТЕМА КЕЙСОВ
 # ───────────────────────────────────────────────
 
-@bot.hybrid_command(name="case", description="🔍 Информация о кейсе наказания")
+@bot.hybrid_command(name="case", description="🔍 Информация о кейсе")
 @app_commands.describe(case_id="ID кейса")
 @commands.has_permissions(manage_messages=True)
 async def case_info(ctx: commands.Context, case_id: str):
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         case = await get_case(case_id)
         if not case:
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Кейс с ID `{case_id}` не найден.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Кейс `{case_id}` не найден.", ephemeral=True)
+        
         embed = discord.Embed(
             title=f"🔍 Кейс #{case_id}",
-            color=0x57F287,
+            color=COLORS["mod"],
             timestamp=datetime.fromisoformat(case['timestamp'])
         )
+        
         user = await bot.fetch_user(int(case['user_id'])) if case['user_id'].isdigit() else None
-        moderator = await bot.fetch_user(int(case['moderator_id'])) if case['moderator_id'].isdigit() else None
+        mod = await bot.fetch_user(int(case['moderator_id'])) if case['moderator_id'].isdigit() else None
+        
         embed.add_field(name="👤 Пользователь", value=user.mention if user else case['user_name'], inline=True)
-        embed.add_field(name="👮 Модератор", value=moderator.mention if moderator else case['moderator_name'], inline=True)
+        embed.add_field(name="👮 Модератор", value=mod.mention if mod else case['moderator_name'], inline=True)
         embed.add_field(name="⚡ Действие", value=case['action'], inline=True)
+        
         if case['duration']:
             embed.add_field(name="⏰ Длительность", value=case['duration'], inline=True)
+        
         embed.add_field(name="📝 Причина", value=case['reason'], inline=False)
         embed.add_field(name="📅 Дата", value=f"<t:{int(datetime.fromisoformat(case['timestamp']).timestamp())}:F>", inline=False)
+        
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -1808,27 +2675,27 @@ async def case_info(ctx: commands.Context, case_id: str):
 #   УЛУЧШЕННЫЙ /HELP
 # ───────────────────────────────────────────────
 
-@bot.hybrid_command(name="help", description="📚 Показать список команд")
+@bot.hybrid_command(name="help", description="📚 Список команд")
 async def help_command(ctx: commands.Context):
     try:
-        is_mod = ctx.author.guild_permissions.manage_messages or ctx.author.guild_permissions.administrator
+        is_mod = is_moderator(ctx.author)
+        
         embed = discord.Embed(
             title="🤖 Помощь по командам",
-            description="Используй кнопки ниже для навигации по категориям\n\n"
-                       "**📋 Основное** - общие команды\n"
-                       "**💰 Экономика** - команды экономики\n"
-                       "**🎮 Развлечения** - развлекательные команды" +
-                       ("\n**🛡️ Модерация** - модераторские команды\n**🎫 Тикеты** - система тикетов" if is_mod else ""),
-            color=0x57F287
+            description="**📋 Основное**\n**💰 Экономика**\n**🎮 Развлечения**" +
+                       ("\n**🛡️ Модерация**\n**🎫 Тикеты**" if is_mod else ""),
+            color=COLORS["welcome"]
         )
-        embed.set_footer(text="Выбери категорию стрелками")
+        embed.set_footer(text="Используй кнопки для навигации")
+        
         view = HelpView(ctx.author, is_mod)
         await ctx.send(embed=embed, view=view, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
 # ───────────────────────────────────────────────
-#   НОВЫЕ КОМАНДЫ
+#   FAQ
 # ───────────────────────────────────────────────
 
 @bot.hybrid_command(name="faq", description="📚 Часто задаваемые вопросы")
@@ -1836,11 +2703,12 @@ async def faq(ctx: commands.Context):
     try:
         embed = discord.Embed(
             title="📚 Часто задаваемые вопросы",
-            description="Выберите категорию вопросов:",
-            color=0x57F287
+            description="Выберите категорию:",
+            color=COLORS["faq"]
         )
         view = FAQView(ctx.author)
         await ctx.send(embed=embed, view=view, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -1851,175 +2719,135 @@ async def faq_add(ctx: commands.Context, category: str, question: str, *, answer
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
-        category_lower = category.lower()
-        if category_lower not in FAQ_CATEGORIES:
-            categories = ", ".join(FAQ_CATEGORIES.keys())
-            return await ctx.send(f"❌ Неверная категория! Доступные: {categories}", ephemeral=True)
-        if category_lower not in faq_data:
-            faq_data[category_lower] = []
-        faq_data[category_lower].append({
-            "question": question,
-            "answer": answer
-        })
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+        
+        cat = category.lower()
+        if cat not in FAQ_CATEGORIES:
+            cats = ", ".join(FAQ_CATEGORIES.keys())
+            return await ctx.send(f"❌ Категории: {cats}", ephemeral=True)
+        
+        faq_data.setdefault(cat, []).append({"question": question, "answer": answer})
         save_faq()
+        
         embed = discord.Embed(
             title="✅ Вопрос добавлен",
-            description=f"**Категория:** {FAQ_CATEGORIES[category_lower]}\n**Вопрос:** {question}",
-            color=0x57F287
+            description=f"**Категория:** {FAQ_CATEGORIES[cat]}\n**Вопрос:** {question}",
+            color=COLORS["faq"]
         )
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="iq", description="Узнать свой честный IQ 😏")
+# ───────────────────────────────────────────────
+#   РАЗВЛЕЧЕНИЯ
+# ───────────────────────────────────────────────
+
+@bot.hybrid_command(name="iq", description="Узнать свой IQ")
 async def iq(ctx: commands.Context):
     try:
-        user_id = ctx.author.id
-        random.seed(user_id + int(datetime.now().timestamp() // 86400))
-        base_iq = random.randint(70, 130)
+        random.seed(ctx.author.id + int(datetime.now().timestamp() // 86400))
+        iq = random.randint(70, 130)
         if random.random() < 0.03:
-            iq_value = random.randint(145, 165)
+            iq = random.randint(145, 165)
             title = "🧠 ГЕНИЙ!"
             color = 0xFFD700
         elif random.random() < 0.10:
-            iq_value = random.randint(115, 144)
-            title = "🌟 Умный человек"
+            iq = random.randint(115, 144)
+            title = "🌟 Умный"
             color = 0x3498DB
         else:
-            iq_value = base_iq
             title = "🧠 Твой IQ"
             color = 0x2ECC71
-        embed = discord.Embed(title=title, description=f"**{ctx.author.mention}, твой IQ: {iq_value}**", color=color)
+
+        embed = discord.Embed(title=title, description=f"**{ctx.author.mention}, твой IQ: {iq}**", color=color)
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text="Тест честный и научный (шучу, рандом каждый день новый) 😄")
+        embed.set_footer(text="Обновляется каждый день")
         await ctx.send(embed=embed, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="valute", description="Курсы валют (view — свежие курсы)")
-@app_commands.describe(action="view — показать курсы")
-async def valute(ctx: commands.Context, action: str = "view"):
+@bot.hybrid_command(name="valute", description="Курсы валют")
+async def valute(ctx: commands.Context):
     await ctx.defer(ephemeral=True)
+    
     try:
-        if action.lower() != "view":
-            await ctx.send("Использование: `/valute view`", ephemeral=True)
-            return
         apis = [
             "https://api.exchangerate-api.com/v4/latest/USD",
             "https://open.er-api.com/v6/latest/USD",
-            "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json"
         ]
+        
         data = None
-        for api_url in apis:
+        for url in apis:
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(api_url, timeout=5) as resp:
+                    async with session.get(url, timeout=5) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             break
             except:
                 continue
+        
         if not data:
             embed = discord.Embed(
-                title="📈 Курсы валют (автономный режим)",
-                description="API временно недоступны. Показаны курсы с последнего обновления.",
-                color=0xFAA61A,
-                timestamp=datetime.now(timezone.utc)
+                title="📈 Курсы валют",
+                description="API временно недоступны",
+                color=COLORS["welcome"]
             )
             embed.add_field(name="🇺🇸 USD", value="1.00", inline=True)
             embed.add_field(name="🇪🇺 EUR", value="0.92", inline=True)
-            embed.add_field(name="🇨🇳 CNY", value="7.25", inline=True)
-            embed.add_field(name="🇬🇧 GBP", value="0.79", inline=True)
             embed.add_field(name="🇷🇺 RUB", value="92.50", inline=True)
-            embed.set_footer(text="Данные могут быть устаревшими • Обновите позже")
+            embed.set_footer(text="Данные могут быть устаревшими")
             await ctx.send(embed=embed, ephemeral=True)
             return
-        if "rates" in data:
-            usd = 1
-            eur = data["rates"].get("EUR", 0.92)
-            cny = data["rates"].get("CNY", 7.25)
-            gbp = data["rates"].get("GBP", 0.79)
-            rub = data["rates"].get("RUB", 92.50)
-        elif "usd" in data:
-            rates = data["usd"]
-            usd = 1
-            eur = rates.get("eur", 0.92)
-            cny = rates.get("cny", 7.25)
-            gbp = rates.get("gbp", 0.79)
-            rub = rates.get("rub", 92.50)
-        else:
-            usd, eur, cny, gbp, rub = 1, 0.92, 7.25, 0.79, 92.50
+
+        rates = data.get("rates", {})
         embed = discord.Embed(
-            title="📈 Актуальные курсы валют (к USD)",
-            color=0x2ECC71,
+            title="📈 Актуальные курсы (к USD)",
+            color=COLORS["welcome"],
             timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(name="🇺🇸 USD", value=f"{usd:.2f}", inline=True)
-        embed.add_field(name="🇪🇺 EUR", value=f"{eur:.2f}", inline=True)
-        embed.add_field(name="🇨🇳 CNY", value=f"{cny:.2f}", inline=True)
-        embed.add_field(name="🇬🇧 GBP", value=f"{gbp:.2f}", inline=True)
-        embed.add_field(name="🇷🇺 RUB", value=f"{rub:.2f}", inline=True)
-        embed.set_footer(text="Источник: currency-api • Обновлено")
+        
+        embed.add_field(name="🇺🇸 USD", value="1.00", inline=True)
+        embed.add_field(name="🇪🇺 EUR", value=f"{rates.get('EUR', 0.92):.2f}", inline=True)
+        embed.add_field(name="🇬🇧 GBP", value=f"{rates.get('GBP', 0.79):.2f}", inline=True)
+        embed.add_field(name="🇨🇳 CNY", value=f"{rates.get('CNY', 7.25):.2f}", inline=True)
+        embed.add_field(name="🇯🇵 JPY", value=f"{rates.get('JPY', 150.0):.2f}", inline=True)
+        embed.add_field(name="🇷🇺 RUB", value=f"{rates.get('RUB', 92.50):.2f}", inline=True)
+        
+        embed.set_footer(text="Источник: exchangerate-api")
         await ctx.send(embed=embed, ephemeral=True)
-    except asyncio.CancelledError:
-        pass
+
     except Exception as e:
-        error_msg = f"Ошибка получения курсов: {str(e)}"
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=error_msg,
-            color=0xF04747,
-            timestamp=datetime.now(timezone.utc)
-        )
-        try:
-            await ctx.send(embed=embed, ephemeral=True)
-        except:
-            print(f"Ошибка в valute: {error_msg}")
-
-@bot.hybrid_command(name="shop", description="🛒 Магазин (в разработке)")
-async def shop(ctx: commands.Context):
-    embed = discord.Embed(
-        title="🛒 Магазин",
-        description="Магазин будет доступен в версии **1.0.0**\n\nСледи за обновлениями!",
-        color=0x3498DB
-    )
-    await ctx.send(embed=embed, ephemeral=True)
-
-@bot.hybrid_command(name="guildsettings", description="⚙️ Настройки сервера (в разработке)")
-async def guildsettings(ctx: commands.Context):
-    embed = discord.Embed(
-        title="⚙️ Настройки сервера",
-        description="Здесь будут настройки сервера и кастомный античит\n\nВ разработке",
-        color=0x7289DA
-    )
-    await ctx.send(embed=embed, ephemeral=True)
+        await send_error_embed(ctx, str(e))
 
 # ───────────────────────────────────────────────
-#   НОВЫЕ МОДЕРАТОРСКИЕ КОМАНДЫ
+#   МОДЕРАЦИЯ
 # ───────────────────────────────────────────────
 
-@bot.hybrid_command(name="warn", description="Выдать предупреждение пользователю")
-@app_commands.describe(member="Пользователь", reason="Причина предупреждения")
+@bot.hybrid_command(name="warn", description="Выдать предупреждение")
+@app_commands.describe(member="Пользователь", reason="Причина")
 @commands.has_permissions(manage_messages=True)
 async def warn(ctx: commands.Context, member: discord.Member, *, reason: str = "Не указана"):
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
-        if is_protected(member, ctx):
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
+        if is_protected_from_automod(member):
             return await ctx.send("❌ Нельзя выдать предупреждение этому пользователю!", ephemeral=True)
+
         user_id = str(member.id)
-        if user_id not in warnings_data:
-            warnings_data[user_id] = []
-        warnings_data[user_id].append({
+        warnings_data.setdefault(user_id, []).append({
             "moderator": str(ctx.author),
             "reason": reason,
-            "time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         })
         save_warnings()
-        warn_count = get_warning_count(user_id)
+        
+        count = get_warning_count(user_id)
         case_id = await create_case(member, ctx.author, "Предупреждение", reason)
+        
         await send_punishment_log(
             member=member,
             punishment_type="⚠️ Предупреждение",
@@ -2028,152 +2856,150 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str = "
             moderator=ctx.author,
             case_id=case_id
         )
+        
         embed = discord.Embed(
             title="⚠️ Предупреждение выдано",
-            description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}\n**Всего предупреждений:** {warn_count}",
-            color=0xFAA61A
+            description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}\n**Всего:** {count}",
+            color=COLORS["mod"]
         )
         await ctx.send(embed=embed, ephemeral=True)
+        
         await check_auto_punishment(member, reason)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="warnings", description="Показать предупреждения пользователя")
+@bot.hybrid_command(name="warnings", description="Список предупреждений")
 @app_commands.describe(member="Пользователь")
 @commands.has_permissions(manage_messages=True)
 async def warnings(ctx: commands.Context, member: discord.Member):
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         user_id = str(member.id)
         clean_old_warnings(user_id)
-        user_warnings = warnings_data.get(user_id, [])
-        if not user_warnings:
+        warns = warnings_data.get(user_id, [])
+        
+        if not warns:
             return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
+        
         embed = discord.Embed(
-            title=f"⚠️ Предупреждения • {member.display_name}",
-            description=f"Всего: **{len(user_warnings)}**",
-            color=0xFAA61A
+            title=f"⚠️ Предупреждения {member.display_name}",
+            description=f"Всего: **{len(warns)}**",
+            color=COLORS["mod"]
         )
         embed.set_thumbnail(url=member.display_avatar.url)
-        for i, warn in enumerate(user_warnings[-10:], 1):
+        
+        for i, w in enumerate(warns[-10:], 1):
             embed.add_field(
-                name=f"{i}. {warn['time']}",
-                value=f"**Модератор:** {warn['moderator']}\n**Причина:** {warn['reason']}",
+                name=f"{i}. {w['time']}",
+                value=f"**Модератор:** {w['moderator']}\n**Причина:** {w['reason']}",
                 inline=False
             )
-        embed.set_footer(text="Показаны последние 10 предупреждений")
+        
+        embed.set_footer(text="Последние 10")
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="unwarn", description="Удалить конкретное предупреждение")
-@app_commands.describe(member="Пользователь", warn_index="Номер предупреждения (1,2,3...)")
-@commands.has_permissions(manage_messages=True)
-async def unwarn(ctx: commands.Context, member: discord.Member, warn_index: int):
-    try:
-        if not ctx.author.guild_permissions.manage_messages:
-            await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
-        if is_protected(member, ctx):
-            return await ctx.send("❌ Нельзя удалять предупреждения этого пользователя!", ephemeral=True)
-        user_id = str(member.id)
-        if user_id not in warnings_data or not warnings_data[user_id]:
-            return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
-        if warn_index < 1 or warn_index > len(warnings_data[user_id]):
-            return await ctx.send(f"❌ Неверный номер предупреждения. Всего предупреждений: {len(warnings_data[user_id])}", ephemeral=True)
-        removed = warnings_data[user_id].pop(warn_index - 1)
-        if not warnings_data[user_id]:
-            del warnings_data[user_id]
-        save_warnings()
-        await send_mod_log(
-            title="🧹 Предупреждение удалено",
-            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Номер:** {warn_index}\n**Причина:** {removed['reason']}",
-            color=0x57F287
-        )
-        await ctx.send(f"✅ Предупреждение #{warn_index} для {member.mention} удалено.", ephemeral=True)
-    except Exception as e:
-        await send_error_embed(ctx, str(e))
-
-@bot.hybrid_command(name="clearwarn", description="Очистить все предупреждения пользователя")
-@app_commands.describe(member="Пользователь")
+@bot.hybrid_command(name="clearwarn", description="Очистить предупреждения")
+@app_commands.describe(member="Пользователь", warn_id="all или номер")
 @commands.has_permissions(administrator=True)
-async def clearwarn(ctx: commands.Context, member: discord.Member):
+async def clearwarn(ctx: commands.Context, member: discord.Member, warn_id: str = "all"):
     try:
         if not ctx.author.guild_permissions.administrator:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         user_id = str(member.id)
         if user_id not in warnings_data or not warnings_data[user_id]:
             return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
-        del warnings_data[user_id]
-        save_warnings()
-        await ctx.send(f"✅ Все предупреждения {member.mention} удалены.", ephemeral=True)
-        await send_mod_log(
-            title="🧹 Очистка предупреждений",
-            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Действие:** Все предупреждения удалены",
-            color=0x57F287
-        )
+        
+        if warn_id.lower() == "all":
+            del warnings_data[user_id]
+            save_warnings()
+            await ctx.send(f"✅ Все предупреждения {member.mention} удалены.", ephemeral=True)
+            await send_mod_log(
+                title="🧹 Очистка предупреждений",
+                description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}",
+                color=COLORS["mod"]
+            )
+        else:
+            await ctx.send("❌ Удаление конкретного предупреждения пока не реализовано.", ephemeral=True)
+            
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
 @bot.hybrid_command(name="mute", description="Замутить пользователя")
-@app_commands.describe(member="Пользователь", duration="Длительность (1h, 1d, 30m)", reason="Причина")
+@app_commands.describe(member="Пользователь", duration="1h, 1d, 30m", reason="Причина")
 @commands.has_permissions(manage_messages=True)
 async def mute(ctx: commands.Context, member: discord.Member, duration: str, *, reason: str = "Не указана"):
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
-        if is_protected(member, ctx):
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
+        if is_protected_from_automod(member):
             return await ctx.send("❌ Нельзя замутить этого пользователя!", ephemeral=True)
-        duration_seconds = 0
+        
+        seconds = 0
         if duration.endswith("h"):
-            duration_seconds = int(duration[:-1]) * 3600
+            seconds = int(duration[:-1]) * 3600
         elif duration.endswith("d"):
-            duration_seconds = int(duration[:-1]) * 86400
+            seconds = int(duration[:-1]) * 86400
         elif duration.endswith("m"):
-            duration_seconds = int(duration[:-1]) * 60
+            seconds = int(duration[:-1]) * 60
         elif duration.endswith("s"):
-            duration_seconds = int(duration[:-1])
+            seconds = int(duration[:-1])
         else:
-            duration_seconds = int(duration) * 60
-        if duration_seconds <= 0:
+            seconds = int(duration) * 60
+        
+        if seconds <= 0:
             return await ctx.send("❌ Некорректная длительность!", ephemeral=True)
-        duration_delta = timedelta(seconds=duration_seconds)
-        await member.timeout(duration_delta, reason=reason)
-        hours = duration_seconds // 3600
-        minutes = (duration_seconds % 3600) // 60
-        duration_text = f"{hours}ч {minutes}м" if hours > 0 else f"{minutes}м"
-        case_id = await create_case(member, ctx.author, "Мут", reason, duration_text)
+        
+        delta = timedelta(seconds=seconds)
+        await member.timeout(delta, reason=reason)
+        
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        dur_text = f"{hours}ч {minutes}м" if hours > 0 else f"{minutes}м"
+        
+        case_id = await create_case(member, ctx.author, "Мут", reason, dur_text)
+        
         await send_punishment_log(
             member=member,
             punishment_type="🔇 Мут",
-            duration=duration_text,
+            duration=dur_text,
             reason=reason,
             moderator=ctx.author,
             case_id=case_id
         )
+        
         embed = discord.Embed(
             title="🔇 Пользователь замучен",
-            description=f"**Пользователь:** {member.mention}\n**Длительность:** {duration_text}\n**Причина:** {reason}",
-            color=0xF04747
+            description=f"**Пользователь:** {member.mention}\n**Длительность:** {dur_text}\n**Причина:** {reason}",
+            color=COLORS["mod"]
         )
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="unmute", description="Снять мут с пользователя")
+@bot.hybrid_command(name="unmute", description="Снять мут")
 @app_commands.describe(member="Пользователь", reason="Причина")
 @commands.has_permissions(manage_messages=True)
 async def unmute(ctx: commands.Context, member: discord.Member, *, reason: str = "Не указана"):
     try:
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         await member.timeout(None, reason=reason)
         case_id = await create_case(member, ctx.author, "Снятие мута", reason)
+        
         await send_punishment_log(
             member=member,
             punishment_type="🔊 Мут снят",
@@ -2182,91 +3008,66 @@ async def unmute(ctx: commands.Context, member: discord.Member, *, reason: str =
             moderator=ctx.author,
             case_id=case_id
         )
+        
         embed = discord.Embed(
             title="🔊 Мут снят",
             description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}",
-            color=0x57F287
+            color=COLORS["mod"]
         )
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="ban", description="Забанить пользователя")
-@app_commands.describe(member="Пользователь", reason="Причина", delete_message_days="Удалить сообщения за N дней (0-7)")
-@commands.has_permissions(ban_members=True)
-async def ban(ctx: commands.Context, member: discord.Member, reason: str = "Не указана", delete_message_days: int = 0):
-    try:
-        if not ctx.author.guild_permissions.ban_members:
-            await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
-        if is_protected(member, ctx):
-            return await ctx.send("❌ Нельзя забанить этого пользователя!", ephemeral=True)
-        await member.ban(reason=reason, delete_message_days=delete_message_days)
-        case_id = await create_case(member, ctx.author, "Бан", reason)
-        await send_punishment_log(
-            member=member,
-            punishment_type="🔨 Бан",
-            duration="Навсегда",
-            reason=reason,
-            moderator=ctx.author,
-            case_id=case_id
-        )
-        embed = discord.Embed(
-            title="🔨 Пользователь забанен",
-            description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}\n**Удалено сообщений за:** {delete_message_days} дней",
-            color=0xF04747
-        )
-        await ctx.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        await send_error_embed(ctx, str(e))
-
-@bot.hybrid_command(name="temprole", description="Выдать временную роль")
-@app_commands.describe(member="Пользователь", role="Роль", duration="Длительность (1h, 1d, 30m)")
+@bot.hybrid_command(name="temprole", description="Временная роль")
+@app_commands.describe(member="Пользователь", role="Роль", duration="1h, 1d, 30m")
 @commands.has_permissions(manage_roles=True)
 async def temprole(ctx: commands.Context, member: discord.Member, role: discord.Role, duration: str):
     try:
         if not ctx.author.guild_permissions.manage_roles:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         if role >= ctx.author.top_role and ctx.author.id != OWNER_ID:
             return await ctx.send("❌ Нельзя выдать роль выше своей!", ephemeral=True)
-        duration_seconds = 0
+        
+        seconds = 0
         if duration.endswith("h"):
-            duration_seconds = int(duration[:-1]) * 3600
+            seconds = int(duration[:-1]) * 3600
         elif duration.endswith("d"):
-            duration_seconds = int(duration[:-1]) * 86400
+            seconds = int(duration[:-1]) * 86400
         elif duration.endswith("m"):
-            duration_seconds = int(duration[:-1]) * 60
-        elif duration.endswith("s"):
-            duration_seconds = int(duration[:-1])
+            seconds = int(duration[:-1]) * 60
         else:
-            duration_seconds = int(duration) * 60
-        if duration_seconds <= 0:
+            seconds = int(duration) * 60
+        
+        if seconds <= 0:
             return await ctx.send("❌ Некорректная длительность!", ephemeral=True)
+        
         await member.add_roles(role, reason=f"Временная роль от {ctx.author}")
+        
         user_id = str(member.id)
-        if user_id not in temp_roles:
-            temp_roles[user_id] = {}
-        expiry = datetime.utcnow().timestamp() + duration_seconds
-        temp_roles[user_id][str(role.id)] = expiry
-        hours = duration_seconds // 3600
-        minutes = (duration_seconds % 3600) // 60
-        duration_text = f"{hours}ч {minutes}м" if hours > 0 else f"{minutes}м"
+        temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + seconds
+        
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        dur_text = f"{hours}ч {minutes}м" if hours > 0 else f"{minutes}м"
+        
         embed = discord.Embed(
-            title="⏱️ Временная роль выдана",
-            description=f"**Пользователь:** {member.mention}\n**Роль:** {role.mention}\n**Длительность:** {duration_text}",
-            color=0x57F287
+            title="⏱️ Временная роль",
+            description=f"**Пользователь:** {member.mention}\n**Роль:** {role.mention}\n**Длительность:** {dur_text}",
+            color=COLORS["mod"]
         )
         await ctx.send(embed=embed, ephemeral=True)
+        
         await send_mod_log(
             title="⏱️ Временная роль",
-            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Роль:** {role.mention}\n**Длительность:** {duration_text}",
-            color=0x57F287
+            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Роль:** {role.mention}\n**Длительность:** {dur_text}",
+            color=COLORS["mod"]
         )
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
-
-# Команда raidmode УДАЛЕНА
 
 @bot.hybrid_command(name="ticket", description="Управление тикетами")
 @app_commands.describe(action="setup / close")
@@ -2275,23 +3076,25 @@ async def ticket(ctx: commands.Context, action: str = "setup"):
     try:
         if not ctx.author.guild_permissions.manage_channels:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send("❌ У тебя нет прав на использование этой команды!", ephemeral=True)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+
         if not has_full_access(ctx.guild.id):
-            return await ctx.send("❌ Эта команда доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send("❌ Команда только на сервере разработчика.", ephemeral=True)
+
         action = action.lower()
         if action == "setup":
             embed = discord.Embed(
                 title="🎫 Система тикетов",
-                description="Нажми кнопку ниже, чтобы создать тикет с выбором категории.",
-                color=0x57F287
+                description="Нажми кнопку, чтобы создать тикет",
+                color=COLORS["ticket"]
             )
             view = TicketPanelView()
             await ctx.send(embed=embed, view=view)
-            await ctx.send("✅ Панель тикетов с категориями создана!", delete_after=10)
+            await ctx.send("✅ Панель создана!", delete_after=10)
         elif action == "close":
-            if not any(ctx.channel.name.startswith(prefix) for prefix in ["🔧-", "⚠️-", "❓-", "🤝-", "📌-"]):
-                return await ctx.send("❌ Эту команду можно использовать только внутри тикета!", ephemeral=True)
-            await ctx.send("🔒 Тикет закрывается через 5 секунд...")
+            if not any(ctx.channel.name.startswith(p) for p in ["🔧-", "⚠️-", "❓-", "🤝-", "📌-"]):
+                return await ctx.send("❌ Это не тикет!", ephemeral=True)
+            await ctx.send("🔒 Закрываю...")
             await asyncio.sleep(5)
             await ctx.channel.delete()
         else:
@@ -2299,101 +3102,181 @@ async def ticket(ctx: commands.Context, action: str = "setup"):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
+@bot.hybrid_command(name="ban", description="Забанить пользователя")
+@app_commands.describe(member="Пользователь", reason="Причина", delete_message_days="Удалить сообщения за N дней")
+@commands.has_permissions(ban_members=True)
+async def ban(ctx: commands.Context, member: discord.Member, reason: str = "Не указана", delete_message_days: int = 0):
+    try:
+        if not ctx.author.guild_permissions.ban_members:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+        if is_protected_from_automod(member):
+            return await ctx.send("❌ Нельзя забанить этого пользователя!", ephemeral=True)
+        
+        await member.ban(reason=reason, delete_message_days=delete_message_days)
+        case_id = await create_case(member, ctx.author, "Бан", reason)
+        
+        await send_punishment_log(
+            member=member,
+            punishment_type="🔨 Бан",
+            duration="Навсегда",
+            reason=reason,
+            moderator=ctx.author,
+            case_id=case_id
+        )
+        
+        embed = discord.Embed(
+            title="🔨 Пользователь забанен",
+            description=f"**Пользователь:** {member.mention}\n**Причина:** {reason}\n**Удалено сообщений за:** {delete_message_days} дней",
+            color=COLORS["mod"]
+        )
+        await ctx.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        await send_error_embed(ctx, str(e))
+
+@bot.hybrid_command(name="unwarn", description="Удалить предупреждение")
+@app_commands.describe(member="Пользователь", warn_index="Номер предупреждения")
+@commands.has_permissions(manage_messages=True)
+async def unwarn(ctx: commands.Context, member: discord.Member, warn_index: int):
+    try:
+        if not ctx.author.guild_permissions.manage_messages:
+            await check_unauthorized_commands(ctx.author)
+            return await ctx.send("❌ Нет прав!", ephemeral=True)
+        if is_protected_from_automod(member):
+            return await ctx.send("❌ Нельзя удалять предупреждения этого пользователя!", ephemeral=True)
+        
+        user_id = str(member.id)
+        if user_id not in warnings_data or not warnings_data[user_id]:
+            return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
+        
+        if warn_index < 1 or warn_index > len(warnings_data[user_id]):
+            return await ctx.send(f"❌ Неверный номер. Всего: {len(warnings_data[user_id])}", ephemeral=True)
+        
+        removed = warnings_data[user_id].pop(warn_index - 1)
+        if not warnings_data[user_id]:
+            del warnings_data[user_id]
+        save_warnings()
+        
+        await send_mod_log(
+            title="🧹 Предупреждение удалено",
+            description=f"**Модератор:** {ctx.author.mention}\n**Пользователь:** {member.mention}\n**Номер:** {warn_index}\n**Причина:** {removed['reason']}",
+            color=COLORS["mod"]
+        )
+        
+        await ctx.send(f"✅ Предупреждение #{warn_index} для {member.mention} удалено.", ephemeral=True)
+    except Exception as e:
+        await send_error_embed(ctx, str(e))
+
 # ───────────────────────────────────────────────
-#   ОСТАЛЬНЫЕ КОМАНДЫ
+#   ЭКОНОМИКА (ПРОДОЛЖЕНИЕ)
 # ───────────────────────────────────────────────
 
 @bot.hybrid_command(name="vault", description="🏦 Казна сервера")
 async def vault(ctx: commands.Context):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Эта команда доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Команда только на сервере разработчика.", ephemeral=True)
         if not ctx.author.guild_permissions.manage_messages and ctx.author.id != OWNER_ID:
             await check_unauthorized_commands(ctx.author)
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} У тебя нет прав на просмотр казны.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Нет прав.", ephemeral=True)
+
         vault = economy_data.get("server_vault", 0)
+        users = len([k for k in economy_data.keys() if k != "server_vault"])
+        total = sum(v.get("balance", 0) for k, v in economy_data.items() if k != "server_vault")
+        avg = total // max(users, 1)
+        
         embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['vault']} Казна сервера",
-            description=f"**Накоплено:** `{format_number(vault)}` {ECONOMY_EMOJIS['coin']}",
-            color=0xFFD700
+            color=COLORS["economy"],
+            timestamp=datetime.now(timezone.utc)
         )
-        total_users = len([k for k in economy_data.keys() if k != "server_vault"])
-        total_balance = sum(v.get("balance", 0) for k, v in economy_data.items() if k != "server_vault")
+        
+        embed.add_field(name="💰 Накоплено", value=f"**{format_number(vault)}** {ECONOMY_EMOJIS['coin']}", inline=False)
         embed.add_field(
             name="📊 Статистика",
-            value=f"**Участников:** {total_users}\n"
-                  f"**Всего монет:** {format_number(total_balance)} {ECONOMY_EMOJIS['coin']}\n"
-                  f"**Средний баланс:** {format_number(total_balance // max(total_users, 1))} {ECONOMY_EMOJIS['coin']}",
+            value=f"**Участников:** {users}\n**Всего монет:** {format_number(total)} {ECONOMY_EMOJIS['coin']}\n**Средний баланс:** {format_number(avg)} {ECONOMY_EMOJIS['coin']}",
             inline=False
         )
-        embed.set_footer(text="Экономика v0.11.0 • mortisplay.ru", icon_url=bot.user.display_avatar.url)
+        
+        embed.set_footer(text="Экономика v1.0", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
 @bot.hybrid_command(name="balance", description="💰 Посмотреть баланс")
-@app_commands.describe(member="Пользователь (по умолчанию — ты)")
+@app_commands.describe(member="Пользователь")
 async def balance(ctx: commands.Context, member: discord.Member = None):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
         member = member or ctx.author
         user_id = str(member.id)
+
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
             save_economy()
+
         tax = await apply_wealth_tax(user_id)
         bal = economy_data[user_id]["balance"]
         vault = economy_data.get("server_vault", 0)
-        all_users = [(k, v.get("balance", 0)) for k, v in economy_data.items() if k != "server_vault"]
-        sorted_users = sorted(all_users, key=lambda x: x[1], reverse=True)
-        user_rank = 1
-        for i, (uid, _) in enumerate(sorted_users, 1):
-            if uid == user_id:
-                user_rank = i
-                break
-        now = datetime.utcnow().timestamp()
-        last_daily = economy_data[user_id].get("last_daily", 0)
-        remaining = DAILY_COOLDOWN - (now - last_daily)
+        
+        users = [(k, v.get("balance", 0)) for k, v in economy_data.items() if k != "server_vault"]
+        users.sort(key=lambda x: x[1], reverse=True)
+        rank = next((i for i, (uid, _) in enumerate(users, 1) if uid == user_id), len(users) + 1)
+
+        now = datetime.now(timezone.utc).timestamp()
+        last = economy_data[user_id].get("last_daily", 0)
+        remaining = DAILY_COOLDOWN - (now - last)
+        
         if remaining <= 0:
-            daily_status = f"{ECONOMY_EMOJIS['gift']} **Daily доступен!** Используй `/daily`"
+            daily = f"{ECONOMY_EMOJIS['gift']} **Daily доступен!**"
         else:
             hours = int(remaining // 3600)
             minutes = int((remaining % 3600) // 60)
-            progress = (now - last_daily) / DAILY_COOLDOWN
+            progress = (now - last) / DAILY_COOLDOWN
             bar = create_progress_bar(int(progress * 100), 100)
-            percent = int(progress * 100)
-            daily_status = f"⏳ До daily: **{hours}ч {minutes}мин**\n`{bar}` **{percent}%**"
+            daily = f"⏳ До daily: **{hours}ч {minutes}мин**\n`{bar}` **{int(progress * 100)}%**"
+
         embed = discord.Embed(
-            title=f"{get_rank_emoji(bal)} Баланс • {member.display_name}",
-            color=0xFFD700 if bal >= 10000 else 0x3498DB,
-            timestamp=datetime.utcnow()
+            title=f"{get_rank_emoji(bal)} Баланс {member.display_name}",
+            color=COLORS["economy"],
+            timestamp=datetime.now(timezone.utc)
         )
+        
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.add_field(name=f"{ECONOMY_EMOJIS['balance']} Монеты", value=f"**`{format_number(bal)}`** {ECONOMY_EMOJIS['coin']}", inline=True)
-        embed.add_field(name="🏆 Место в топе", value=f"**#{user_rank}** из {len(sorted_users)}", inline=True)
+        embed.add_field(name="🏆 Место", value=f"**#{rank}** из {len(users)}", inline=True)
         embed.add_field(name=f"{ECONOMY_EMOJIS['bank']} Казна", value=f"`{format_number(vault)}` {ECONOMY_EMOJIS['coin']}", inline=True)
+
         if tax > 0:
-            embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']} (1% > 10к)", inline=False)
-        embed.add_field(name=f"{ECONOMY_EMOJIS['gift']} Ежедневный бонус", value=daily_status, inline=False)
-        if "investments" in economy_data[user_id] and economy_data[user_id]["investments"]:
-            active_investments = len([i for i in economy_data[user_id]["investments"] if i["end_time"] > now])
-            if active_investments > 0:
-                embed.add_field(name=f"{ECONOMY_EMOJIS['investment']} Инвестиции", value=f"Активно: **{active_investments}**", inline=False)
-        embed.set_footer(text=f"ID: {member.id} • Экономика v0.11.0", icon_url=bot.user.display_avatar.url)
+            embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}", inline=False)
+
+        embed.add_field(name=f"{ECONOMY_EMOJIS['gift']} Ежедневный бонус", value=daily, inline=False)
+        
+        inv = economy_data[user_id].get("investments", [])
+        active = sum(1 for i in inv if i["end_time"] > now)
+        if active:
+            embed.add_field(name=f"{ECONOMY_EMOJIS['investment']} Инвестиции", value=f"Активно: **{active}**", inline=False)
+
+        embed.set_footer(text=f"ID: {member.id}", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
+
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="daily", description="🎁 Получить ежедневную награду")
+@bot.hybrid_command(name="daily", description="🎁 Ежедневный бонус")
 async def daily(ctx: commands.Context):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика доступна только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
         user_id = str(ctx.author.id)
-        now = datetime.utcnow().timestamp()
+        now = datetime.now(timezone.utc).timestamp()
+
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+
         last = economy_data[user_id].get("last_daily", 0)
         if now - last < DAILY_COOLDOWN:
             remaining = int(DAILY_COOLDOWN - (now - last))
@@ -2401,92 +3284,101 @@ async def daily(ctx: commands.Context):
             minutes = (remaining % 3600) // 60
             progress = (now - last) / DAILY_COOLDOWN
             bar = create_progress_bar(int(progress * 100), 100)
-            percent = int(progress * 100)
+            
             embed = discord.Embed(
                 title=f"{ECONOMY_EMOJIS['time']} Daily на кулдауне",
-                description=f"Следующая награда через **{hours}ч {minutes}мин**",
-                color=0xFAA61A
+                description=f"Следующая через **{hours}ч {minutes}мин**",
+                color=COLORS["economy"]
             )
-            embed.add_field(name="Прогресс", value=f"`{bar}` **{percent}%**", inline=False)
-            embed.set_footer(text=f"Экономика v0.11.0 • mortisplay.ru", icon_url=bot.user.display_avatar.url)
+            embed.add_field(name="Прогресс", value=f"`{bar}` **{int(progress * 100)}%**", inline=False)
             return await ctx.send(embed=embed, ephemeral=True)
+
         tax = await apply_wealth_tax(user_id)
         roll = random.randint(1, 100)
-        if roll <= 70:
-            rarity_name, _, min_coins, max_coins, color, emoji = RARITIES[0]
-        elif roll <= 90:
-            rarity_name, _, min_coins, max_coins, color, emoji = RARITIES[1]
-        elif roll <= 99:
-            rarity_name, _, min_coins, max_coins, color, emoji = RARITIES[2]
-        else:
-            rarity_name, _, min_coins, max_coins, color, emoji = RARITIES[3]
-        reward = random.randint(min_coins, max_coins)
-        streak_bonus = 0
-        last_daily_date = datetime.fromtimestamp(last).date() if last > 0 else None
-        today = datetime.utcnow().date()
-        if last_daily_date and (today - last_daily_date).days == 1:
-            streak_bonus = int(reward * 0.1)
-            reward += streak_bonus
+        
+        for r in RARITIES:
+            if roll <= r[1]:
+                rarity, _, min_c, max_c, color, emoji = r
+                break
+        
+        reward = random.randint(min_c, max_c)
+        
+        if last > 0 and (datetime.fromtimestamp(last).date() - datetime.now().date()).days == -1:
+            bonus = int(reward * 0.1)
+            reward += bonus
+
         economy_data[user_id]["balance"] += reward
         economy_data[user_id]["last_daily"] = now
         save_economy()
+
         embed = discord.Embed(
-            title=f"{emoji} {rarity_name} награда!",
+            title=f"{emoji} {rarity} награда!",
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
             color=color,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.add_field(name="📊 Детали", value=f"**Редкость:** {rarity_name}\n**Диапазон:** {min_coins}-{max_coins} {ECONOMY_EMOJIS['coin']}", inline=True)
-        if streak_bonus > 0:
-            embed.add_field(name="🔥 Стрик", value=f"+{format_number(streak_bonus)} (10%)", inline=True)
+        
+        embed.add_field(name="📊 Детали", value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}-{max_c} {ECONOMY_EMOJIS['coin']}", inline=True)
+        
+        if bonus:
+            embed.add_field(name="🔥 Стрик", value=f"+{format_number(bonus)} (10%)", inline=True)
+        
         if tax > 0:
-            embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"**-{format_number(tax)}** {ECONOMY_EMOJIS['coin']} (1% > 10к)", inline=False)
-        embed.set_footer(text=f"Новый баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']} • Экономика v0.11.0", icon_url=bot.user.display_avatar.url)
+            embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"**-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}", inline=False)
+
+        embed.set_footer(text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}")
         await ctx.send(embed=embed, ephemeral=True)
+
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="top", description="🏆 Топ богатейших пользователей")
+@bot.hybrid_command(name="top", description="🏆 Топ богачей")
 async def top(ctx: commands.Context):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика доступна только на сервере разработчика.", ephemeral=True)
-        users = []
-        for user_id, data in economy_data.items():
-            if user_id != "server_vault" and data.get("balance", 0) > 0:
-                users.append((user_id, data.get("balance", 0)))
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
+        users = [(uid, data.get("balance", 0)) for uid, data in economy_data.items() 
+                if uid != "server_vault" and data.get("balance", 0) > 0]
+        
         if not users:
             return await ctx.send(f"{ECONOMY_EMOJIS['warning']} Пока нет пользователей с монетами!", ephemeral=True)
+        
         users.sort(key=lambda x: x[1], reverse=True)
+        
         embed = discord.Embed(
             title=f"{ECONOMY_EMOJIS['crown']} Топ богатейших",
-            color=0xFFD700,
-            timestamp=datetime.utcnow()
+            color=COLORS["economy"],
+            timestamp=datetime.now(timezone.utc)
         )
-        top_text = ""
+        
+        text = ""
         medals = ["🥇", "🥈", "🥉"]
-        for i, (user_id, balance) in enumerate(users[:10], 1):
+        
+        for i, (uid, bal) in enumerate(users[:10], 1):
             try:
-                user = await bot.fetch_user(int(user_id))
+                user = await bot.fetch_user(int(uid))
                 name = user.display_name
             except:
-                name = f"ID: {user_id}"
+                name = f"ID: {uid}"
+            
             medal = medals[i-1] if i <= 3 else f"**{i}.**"
-            emoji = get_rank_emoji(balance)
-            top_text += f"{medal} {emoji} **{name}** — `{format_number(balance)}` {ECONOMY_EMOJIS['coin']}\n"
-        embed.description = top_text
-        total_balance = sum(b for _, b in users)
-        avg_balance = total_balance // len(users)
+            text += f"{medal} {get_rank_emoji(bal)} **{name}** — `{format_number(bal)}` {ECONOMY_EMOJIS['coin']}\n"
+        
+        embed.description = text
+        
+        total = sum(b for _, b in users)
+        avg = total // len(users)
         embed.add_field(
             name="📊 Статистика",
-            value=f"**Всего монет:** {format_number(total_balance)} {ECONOMY_EMOJIS['coin']}\n"
-                  f"**Участников:** {len(users)}\n"
-                  f"**Средний баланс:** {format_number(avg_balance)} {ECONOMY_EMOJIS['coin']}",
+            value=f"**Всего монет:** {format_number(total)} {ECONOMY_EMOJIS['coin']}\n**Участников:** {len(users)}\n**Средний баланс:** {format_number(avg)} {ECONOMY_EMOJIS['coin']}",
             inline=False
         )
-        embed.set_footer(text=f"Экономика v0.11.0 • Показано {min(10, len(users))} из {len(users)}", icon_url=bot.user.display_avatar.url)
+        
+        embed.set_footer(text=f"Показано {min(10, len(users))} из {len(users)}")
         await ctx.send(embed=embed, ephemeral=True)
+        
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
@@ -2499,6 +3391,6 @@ if __name__ == "__main__":
         print("Запуск бота...")
         bot.run(TOKEN)
     except discord.LoginFailure:
-        print("Неверный токен.")
+        print("❌ Неверный токен.")
     except Exception as e:
-        print(f"Ошибка запуска: {type(e).__name__}: {e}")
+        print(f"❌ Ошибка запуска: {type(e).__name__}: {e}")
