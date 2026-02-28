@@ -255,6 +255,23 @@ def is_protected_from_automod(member: discord.Member) -> bool:
             member.id == OWNER_ID or
             member.top_role.permissions.administrator)
 
+def can_punish(executor: discord.Member, target: discord.Member) -> bool:
+    """Строгая защита: можно ли executor наказывать target"""
+    if not executor or not target:
+        return False
+    if executor.id == target.id:                    # себя
+        return False
+    if target.id == OWNER_ID:                       # владельца бота
+        return False
+    if target == target.guild.owner:                # владельца сервера
+        return False
+    if target.guild_permissions.administrator:      # любого администратора
+        return False
+    # Защита по иерархии ролей (кроме OWNER_ID)
+    if target.top_role >= executor.top_role and executor.id != OWNER_ID:
+        return False
+    return True
+
 # ───────────────────────────────────────────────
 #   ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ───────────────────────────────────────────────
@@ -524,6 +541,11 @@ class ModActionView(View):
 
     @discord.ui.button(label="Предупредить", style=discord.ButtonStyle.secondary, emoji="⚠️")
     async def warn_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not can_punish(interaction.user, self.member):
+            return await interaction.response.send_message(
+                "❌ Нельзя наказывать владельца сервера, администраторов или самого себя!", 
+                ephemeral=True
+            )
         if not is_moderator(interaction.user):
             return await interaction.response.send_message("❌ Недостаточно прав!", ephemeral=True)
         
@@ -532,6 +554,11 @@ class ModActionView(View):
 
     @discord.ui.button(label="Замутить", style=discord.ButtonStyle.danger, emoji="🔇")
     async def mute_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not can_punish(interaction.user, self.member):
+            return await interaction.response.send_message(
+                "❌ Нельзя наказывать владельца сервера, администраторов или самого себя!", 
+                ephemeral=True
+            )
         if not is_moderator(interaction.user):
             return await interaction.response.send_message("❌ Недостаточно прав!", ephemeral=True)
         
@@ -2811,8 +2838,8 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str = "
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
-        if is_protected_from_automod(member):
-            return await ctx.send("❌ Нельзя выдать предупреждение этому пользователю!", ephemeral=True)
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя наказывать владельца сервера, администраторов или самого себя!", ephemeral=True)
 
         user_id = str(member.id)
         warnings_data.setdefault(user_id, []).append({
@@ -2891,6 +2918,9 @@ async def clearwarn(ctx: commands.Context, member: discord.Member, warn_id: str 
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя очищать предупреждения у владельца сервера или администратора!", ephemeral=True)
+
         user_id = str(member.id)
         if user_id not in warnings_data or not warnings_data[user_id]:
             return await ctx.send(f"✅ У {member.mention} нет предупреждений.", ephemeral=True)
@@ -2919,8 +2949,8 @@ async def mute(ctx: commands.Context, member: discord.Member, duration: str, *, 
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
-        if is_protected_from_automod(member):
-            return await ctx.send("❌ Нельзя замутить этого пользователя!", ephemeral=True)
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя наказывать владельца сервера, администраторов или самого себя!", ephemeral=True)
         
         seconds = 0
         if duration.endswith("h"):
@@ -2974,6 +3004,9 @@ async def unmute(ctx: commands.Context, member: discord.Member, *, reason: str =
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
 
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя снимать мут с владельца сервера или администратора!", ephemeral=True)
+
         await member.timeout(None, reason=reason)
         case_id = await create_case(member, ctx.author, "Снятие мута", reason)
         
@@ -3004,6 +3037,9 @@ async def temprole(ctx: commands.Context, member: discord.Member, role: discord.
         if not ctx.author.guild_permissions.manage_roles:
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
+
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя выдавать временную роль владельцу сервера, администраторам или самому себе!", ephemeral=True)
 
         if role >= ctx.author.top_role and ctx.author.id != OWNER_ID:
             return await ctx.send("❌ Нельзя выдать роль выше своей!", ephemeral=True)
@@ -3087,8 +3123,9 @@ async def ban(ctx: commands.Context, member: discord.Member, reason: str = "Не
         if not ctx.author.guild_permissions.ban_members:
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
-        if is_protected_from_automod(member):
-            return await ctx.send("❌ Нельзя забанить этого пользователя!", ephemeral=True)
+
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя наказывать владельца сервера, администраторов или самого себя!", ephemeral=True)
         
         await member.ban(reason=reason, delete_message_days=delete_message_days)
         case_id = await create_case(member, ctx.author, "Бан", reason)
@@ -3119,8 +3156,9 @@ async def unwarn(ctx: commands.Context, member: discord.Member, warn_index: int)
         if not ctx.author.guild_permissions.manage_messages:
             await check_unauthorized_commands(ctx.author)
             return await ctx.send("❌ Нет прав!", ephemeral=True)
-        if is_protected_from_automod(member):
-            return await ctx.send("❌ Нельзя удалять предупреждения этого пользователя!", ephemeral=True)
+
+        if not can_punish(ctx.author, member):
+            return await ctx.send("❌ Нельзя удалять предупреждения у владельца сервера или администратора!", ephemeral=True)
         
         user_id = str(member.id)
         if user_id not in warnings_data or not warnings_data[user_id]:
