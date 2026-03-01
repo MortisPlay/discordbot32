@@ -1140,6 +1140,61 @@ class FAQView(View):
         self.author = author
         self.add_item(FAQCategorySelect())
 
+class ShopView(View):
+    def __init__(self):
+        super().__init__(timeout=180)  # 3 минуты на выбор
+
+    @discord.ui.button(label="Купить VIP (10000 🪙)", style=discord.ButtonStyle.green, emoji="💎", custom_id="shop_vip")
+    async def buy_vip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_purchase(interaction, "vip")
+
+    @discord.ui.button(label="Купить ×1.5 (1000 🪙)", style=discord.ButtonStyle.blurple, emoji="🚀", custom_id="shop_multiplier")
+    async def buy_multiplier(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_purchase(interaction, "multiplier")
+
+    async def _handle_purchase(self, interaction: discord.Interaction, item_key: str):
+        if not interaction.user.guild_permissions.use_application_commands:  # минимальная проверка
+            return await interaction.response.send_message("❌ Нет доступа к командам", ephemeral=True)
+
+        shop_item = SHOP_ITEMS[item_key]
+        user_id = str(interaction.user.id)
+
+        if user_id not in economy_data or economy_data[user_id].get("balance", 0) < shop_item["price"]:
+            bal = economy_data.get(user_id, {}).get("balance", 0)
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно {format_number(shop_item['price'])}, у вас {format_number(bal)}",
+                ephemeral=True
+            )
+
+        # Списание
+        economy_data[user_id]["balance"] -= shop_item["price"]
+        save_economy()
+
+        if item_key == "vip":
+            role = discord.utils.get(interaction.guild.roles, name="VIP")
+            if role:
+                await interaction.user.add_roles(role)
+                temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+                msg = f"{ECONOMY_EMOJIS['success']} **VIP** на 1 месяц куплен! 🎉\n×2 доход • VIP-чат • ×2 войс • приоритет"
+            else:
+                msg = f"{ECONOMY_EMOJIS['error']} Роль VIP не найдена на сервере! Монеты списаны, но роль не выдана."
+
+        elif item_key == "multiplier":
+            if "multiplier_end" not in economy_data[user_id]:
+                economy_data[user_id]["multiplier_end"] = 0
+            economy_data[user_id]["multiplier_end"] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+            save_economy()
+            msg = f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀"
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+        # Лог покупки (опционально)
+        await send_mod_log(
+            title="🛒 Покупка в магазине",
+            description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {shop_item['name']}\n**Цена:** {format_number(shop_item['price'])}",
+            color=COLORS["economy"]
+        )        
+
 # ───────────────────────────────────────────────
 #   ИНИЦИАЛИЗАЦИЯ БОТА
 # ───────────────────────────────────────────────
@@ -3100,16 +3155,16 @@ async def iq(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@bot.hybrid_command(name="valute", description="Курсы валют")
+@bot.hybrid_command(name="valute", description="Курсы валют + курс внутреннего коина")
 async def valute(ctx: commands.Context):
     await ctx.defer(ephemeral=True)
-    
+
     try:
         apis = [
             "https://api.exchangerate-api.com/v4/latest/USD",
             "https://open.er-api.com/v6/latest/USD",
         ]
-        
+
         data = None
         for url in apis:
             try:
@@ -3120,36 +3175,32 @@ async def valute(ctx: commands.Context):
                             break
             except:
                 continue
-        
-        if not data:
-            embed = discord.Embed(
-                title="📈 Курсы валют",
-                description="API временно недоступны",
-                color=COLORS["welcome"]
-            )
-            embed.add_field(name="🇺🇸 USD", value="1.00", inline=True)
-            embed.add_field(name="🇪🇺 EUR", value="0.92", inline=True)
-            embed.add_field(name="🇷🇺 RUB", value="92.50", inline=True)
-            embed.set_footer(text="Данные могут быть устаревшими")
-            await ctx.send(embed=embed, ephemeral=True)
-            return
 
-        rates = data.get("rates", {})
         embed = discord.Embed(
-            title="📈 Актуальные курсы (к USD)",
+            title="📈 Курсы валют + MortisCoin",
             color=COLORS["welcome"],
             timestamp=datetime.now(timezone.utc)
         )
-        
-        embed.add_field(name="🇺🇸 USD", value="1.00", inline=True)
-        embed.add_field(name="🇪🇺 EUR", value=f"{rates.get('EUR', 0.92):.2f}", inline=True)
-        embed.add_field(name="🇬🇧 GBP", value=f"{rates.get('GBP', 0.79):.2f}", inline=True)
-        embed.add_field(name="🇨🇳 CNY", value=f"{rates.get('CNY', 7.25):.2f}", inline=True)
-        embed.add_field(name="🇯🇵 JPY", value=f"{rates.get('JPY', 150.0):.2f}", inline=True)
-        embed.add_field(name="🇷🇺 RUB", value=f"{rates.get('RUB', 92.50):.2f}", inline=True)
-        
-        embed.set_footer(text="Источник: exchangerate-api")
-        await ctx.send(embed=embed, ephemeral=True)
+
+        if data:
+            rates = data.get("rates", {})
+            embed.add_field(name="🇺🇸 USD", value="1.00", inline=True)
+            embed.add_field(name="🇪🇺 EUR", value=f"{rates.get('EUR', 0.92):.2f}", inline=True)
+            embed.add_field(name="🇬🇧 GBP", value=f"{rates.get('GBP', 0.79):.2f}", inline=True)
+            embed.add_field(name="🇷🇺 RUB", value=f"{rates.get('RUB', 92.50):.2f}", inline=True)
+            embed.add_field(name=" ", value=" ", inline=False)  # разделитель
+        else:
+            embed.description = "⚠️ Внешние курсы временно недоступны"
+
+        # Внутренний коин всегда показываем
+        embed.add_field(
+            name=f"{ECONOMY_EMOJIS['coin']} MortisCoin (внутренний)",
+            value="**1 MortisCoin = 1 🪙**\nФиксированный курс внутри сервера",
+            inline=False
+        )
+
+        embed.set_footer(text="MortisCoin — валюта сервера • Внешние данные: exchangerate-api")
+        await ctx.followup.send(embed=embed, ephemeral=True)
 
     except Exception as e:
         await send_error_embed(ctx, str(e))
@@ -3782,56 +3833,31 @@ async def top(ctx: commands.Context):
 
 @bot.hybrid_command(name="shop", description="🛒 Магазин бустов и ролей")
 async def shop(ctx: commands.Context):
-    embed = discord.Embed(
-        title="🛒 Магазин MortisPlay",
-        description="Купи бусты и привилегии за монеты!",
-        color=COLORS["economy"]
-    )
-    for key, item in SHOP_ITEMS.items():
-        embed.add_field(
-            name=f"{ECONOMY_EMOJIS['gold']} {item['name']}",
-            value=f"**Цена:** {format_number(item['price'])} {ECONOMY_EMOJIS['coin']}\n"
-                  f"{item['description']}",
-            inline=False
+    try:
+        if not has_full_access(ctx.guild.id):
+            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
+        embed = discord.Embed(
+            title="🛒 Магазин MortisPlay",
+            description="Выберите товар и нажмите кнопку ниже, чтобы купить",
+            color=COLORS["economy"]
         )
-    embed.set_footer(text="Используй /buy <vip|multiplier>")
-    await ctx.send(embed=embed, ephemeral=True)
 
+        for key, item in SHOP_ITEMS.items():
+            embed.add_field(
+                name=f"{ECONOMY_EMOJIS['gold']} {item['name']}",
+                value=f"**Цена:** {format_number(item['price'])} {ECONOMY_EMOJIS['coin']}\n"
+                      f"{item['description']}",
+                inline=False
+            )
 
-@bot.hybrid_command(name="buy", description="Купить товар в магазине")
-@app_commands.describe(item="vip или multiplier")
-async def buy(ctx: commands.Context, item: str):
-    item = item.lower()
-    if item not in SHOP_ITEMS:
-        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Такого товара нет! Доступно: vip, multiplier", ephemeral=True)
+        embed.set_footer(text="Нажмите кнопку, чтобы купить • Экономика v0.5.1")
 
-    shop_item = SHOP_ITEMS[item]
-    user_id = str(ctx.author.id)
+        view = ShopView()
+        await ctx.send(embed=embed, view=view, ephemeral=True)
 
-    if user_id not in economy_data or economy_data[user_id].get("balance", 0) < shop_item["price"]:
-        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно {format_number(shop_item['price'])}", ephemeral=True)
-
-    economy_data[user_id]["balance"] -= shop_item["price"]
-    save_economy()
-
-    if item == "vip":
-        role = discord.utils.get(ctx.guild.roles, name="VIP")  # или укажи ID роли
-        if role:
-            await ctx.author.add_roles(role)
-            # Временная роль (на 30 дней)
-            temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
-
-        await ctx.send(f"{ECONOMY_EMOJIS['success']} Ты купил **VIP** на 1 месяц! 🎉\n"
-                       f"×2 монеты • VIP-чат • ×2 за войс • Приоритет тикетов", ephemeral=True)
-
-    elif item == "multiplier":
-        # Сохраняем множитель (можно добавить в economy_data["multiplier_end"])
-        if "multiplier_end" not in economy_data[user_id]:
-            economy_data[user_id]["multiplier_end"] = 0
-        economy_data[user_id]["multiplier_end"] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
-        save_economy()
-
-        await ctx.send(f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀", ephemeral=True)        
+    except Exception as e:
+        await send_error_embed(ctx, str(e))        
 
 # ───────────────────────────────────────────────
 #   ЗАПУСК
