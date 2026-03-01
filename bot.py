@@ -1749,7 +1749,7 @@ async def on_member_join(member):
             )
             
             embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_image(url="https://i.imgur.com/welcome-banner.png")  # Можно заменить на свой баннер
+            embed.set_image(url="https://imgur.com/a/QL8dsGp")  # Можно заменить на свой баннер
             
             embed.add_field(name="📝 Имя", value=member.name, inline=True)
             embed.add_field(name="🆔 ID", value=f"`{member.id}`", inline=True)
