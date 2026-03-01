@@ -3157,8 +3157,6 @@ async def iq(ctx: commands.Context):
 
 @bot.hybrid_command(name="valute", description="Курсы валют + курс внутреннего коина")
 async def valute(ctx: commands.Context):
-    await ctx.defer(ephemeral=True)
-
     try:
         apis = [
             "https://api.exchangerate-api.com/v4/latest/USD",
@@ -3173,7 +3171,7 @@ async def valute(ctx: commands.Context):
                         if resp.status == 200:
                             data = await resp.json()
                             break
-            except:
+            except Exception:
                 continue
 
         embed = discord.Embed(
@@ -3200,7 +3198,7 @@ async def valute(ctx: commands.Context):
         )
 
         embed.set_footer(text="MortisCoin — валюта сервера • Внешние данные: exchangerate-api")
-        await ctx.followup.send(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed, ephemeral=True)
 
     except Exception as e:
         await send_error_embed(ctx, str(e))
