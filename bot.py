@@ -18,8 +18,6 @@ import sys
 # ───────────────────────────────────────────────
 #   НАСТРОЙКИ (БЕЗ ТОКЕНА!)
 # ───────────────────────────────────────────────
-# Токен берется из переменной окружения DISCORD_TOKEN
-# Для локального тестирования можно создать файл .env или установить переменную в системе
 TOKEN = os.getenv('DISCORD_TOKEN')
 if not TOKEN:
     print("❌ ОШИБКА: Не найден токен в переменных окружения!")
@@ -73,6 +71,32 @@ INVESTMENT_MAX_DAYS = 30
 INVESTMENT_BASE_RATE = 0.05
 UNAUTHORIZED_CMD_LIMIT = 3
 UNAUTHORIZED_MUTE_MINUTES = 1
+
+# ───────────────────────────────────────────────
+# НОВЫЕ НАСТРОЙКИ ЭКОНОМИКИ V0.5.0
+# ───────────────────────────────────────────────
+VOICE_INCOME_PER_30MIN = 8          # Сколько монет за 30 минут в голосе
+VOICE_MIN_SESSION_MINUTES = 10      # Минимальное время сессии
+VOICE_DAILY_MAX = 300               # Максимум от войса в сутки
+SUPER_DROP_CHANCE = 2               # Шанс супер-дропа в daily (%)
+SUPER_DROP_MIN = 50000
+SUPER_DROP_MAX = 150000
+
+# Товары в магазине
+SHOP_ITEMS = {
+    "vip": {
+        "name": "VIP роль на 1 месяц",
+        "price": 10000,
+        "duration_days": 30,
+        "description": "×2 ко всем доходам • VIP-чат • ×2 за войс • Приоритет тикетов • Закрытые ивенты"
+    },
+    "multiplier": {
+        "name": "Удвоитель ×1.5 на неделю",
+        "price": 1000,
+        "duration_days": 7,
+        "description": "×1.5 к доходу от сообщений и daily"
+    }
+}
 
 # НАСТРОЙКИ ДЛЯ FAQ
 FAQ_FILE = "faq.json"
@@ -157,6 +181,11 @@ temp_roles = {}
 investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
+
+# Для античита голосового дохода
+voice_start_time = {}       # {user_id: timestamp}
+daily_voice_earned = {}     # {user_id: сумма сегодня}
+daily_voice_reset = {}      # {user_id: дата последнего ресета}
 
 def load_economy():
     global economy_data
@@ -1239,6 +1268,47 @@ async def check_inactive_tickets_task():
     checker = TicketInactivityCheck()
     await checker.check_inactive_tickets()
 
+@tasks.loop(minutes=30)
+async def voice_income_task():
+    now = datetime.now(timezone.utc).timestamp()
+    for guild in bot.guilds:
+        for vc in guild.voice_channels:
+            if "afk" in vc.name.lower():
+                continue
+            for member in vc.members:
+                if member.bot:
+                    continue
+                user_id = str(member.id)
+                if user_id not in economy_data:
+                    continue
+                if member.voice.mute or member.voice.self_mute or member.voice.self_deaf or member.voice.deaf:
+                    continue  # заглушен → не получаем доход
+
+                # Античит: минимальное время сессии
+                if user_id in voice_start_time:
+                    minutes_in_voice = (now - voice_start_time[user_id]) / 60
+                    if minutes_in_voice < VOICE_MIN_SESSION_MINUTES:
+                        continue
+
+                    # Начисляем
+                    earn = VOICE_INCOME_PER_30MIN
+                    if is_vip(member):
+                        earn = int(earn * 2)  # VIP получает ×2
+
+                    # Дневной лимит
+                    if user_id not in daily_voice_earned:
+                        daily_voice_earned[user_id] = 0
+                    if daily_voice_earned[user_id] + earn > VOICE_DAILY_MAX:
+                        earn = VOICE_DAILY_MAX - daily_voice_earned[user_id]
+                        if earn <= 0:
+                            continue
+
+                    economy_data[user_id]["balance"] += earn
+                    daily_voice_earned[user_id] += earn
+
+                    # Сохраняем
+                    save_economy()    
+
 # ───────────────────────────────────────────────
 #   СОБЫТИЯ
 # ───────────────────────────────────────────────
@@ -1281,6 +1351,8 @@ async def on_ready():
     check_temp_roles_task.start()
     check_investments_task.start()
     check_inactive_tickets_task.start()
+    
+    voice_income_task.start()
 
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
@@ -2063,45 +2135,71 @@ async def on_guild_channel_update(before, after):
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Лог голосовых каналов"""
+    """Лог голосовых каналов + учёт времени для дохода"""
+    if member.bot:
+        return
+
+    user_id = str(member.id)
+    now = datetime.now(timezone.utc).timestamp()
+
     try:
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
-        if not log_ch:
-            return
-        
+
+        # Логируем события (как было раньше)
         if before.channel is None and after.channel is not None:
-            embed = discord.Embed(
-                title="🔊 Подключился к голосовому",
-                color=COLORS["audit"],
-                timestamp=datetime.now(timezone.utc)
-            )
-            embed.add_field(name="Пользователь", value=member.mention, inline=True)
-            embed.add_field(name="Канал", value=after.channel.mention, inline=True)
-            await log_ch.send(embed=embed)
-        
+            # Зашёл в голос
+            if log_ch and "afk" not in after.channel.name.lower():
+                embed = discord.Embed(
+                    title="🔊 Подключился к голосовому",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=member.mention, inline=True)
+                embed.add_field(name="Канал", value=after.channel.mention, inline=True)
+                await log_ch.send(embed=embed)
+
+            # Запоминаем время входа (для античита и дохода)
+            if "afk" not in after.channel.name.lower():
+                voice_start_time[user_id] = now
+
         elif before.channel is not None and after.channel is None:
-            embed = discord.Embed(
-                title="🔇 Отключился от голосового",
-                color=COLORS["audit"],
-                timestamp=datetime.now(timezone.utc)
-            )
-            embed.add_field(name="Пользователь", value=member.mention, inline=True)
-            embed.add_field(name="Канал", value=before.channel.mention, inline=True)
-            await log_ch.send(embed=embed)
-        
+            # Вышел из голоса
+            if log_ch:
+                embed = discord.Embed(
+                    title="🔇 Отключился от голосового",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=member.mention, inline=True)
+                embed.add_field(name="Канал", value=before.channel.mention, inline=True)
+                await log_ch.send(embed=embed)
+
+            # Убираем таймер входа
+            if user_id in voice_start_time:
+                del voice_start_time[user_id]
+
         elif before.channel != after.channel and before.channel is not None and after.channel is not None:
-            embed = discord.Embed(
-                title="🔄 Переместился в голосовом",
-                color=COLORS["audit"],
-                timestamp=datetime.now(timezone.utc)
-            )
-            embed.add_field(name="Пользователь", value=member.mention, inline=False)
-            embed.add_field(name="Было", value=before.channel.mention, inline=True)
-            embed.add_field(name="Стало", value=after.channel.mention, inline=True)
-            await log_ch.send(embed=embed)
-            
+            # Перешёл из одного канала в другой
+            if log_ch:
+                embed = discord.Embed(
+                    title="🔄 Переместился в голосовом",
+                    color=COLORS["audit"],
+                    timestamp=datetime.now(timezone.utc)
+                )
+                embed.add_field(name="Пользователь", value=member.mention, inline=False)
+                embed.add_field(name="Было", value=before.channel.mention, inline=True)
+                embed.add_field(name="Стало", value=after.channel.mention, inline=True)
+                await log_ch.send(embed=embed)
+
+            # Обновляем время входа в новый канал (если не AFK)
+            if "afk" not in after.channel.name.lower():
+                voice_start_time[user_id] = now
+            else:
+                if user_id in voice_start_time:
+                    del voice_start_time[user_id]
+
     except Exception as e:
-        print(f"Ошибка в on_voice_state_update: {e}")
+        print(f"Ошибка в on_voice_state_update (лог): {e}")
 
 @bot.event
 async def on_guild_role_create(role):
@@ -3540,39 +3638,45 @@ async def daily(ctx: commands.Context):
             return await ctx.send(embed=embed, ephemeral=True)
 
         tax = await apply_wealth_tax(user_id)
+
+        # Шанс супер-дропа (2%)
         roll = random.randint(1, 100)
-        
-        # ──────────────── БЕЗОПАСНОЕ ОПРЕДЕЛЕНИЕ РЕДКОСТИ ────────────────
-        # Дефолтные значения — используются, если ничего не найдено
-        rarity = "Обычная"
-        min_c   = 15
-        max_c   = 35
-        color   = 0xA8A8A8
-        emoji   = "🪙"
-        bonus   = 0
+        is_super_drop = roll <= SUPER_DROP_CHANCE
 
-        # Поиск подходящей редкости
-        for r in RARITIES:
-            if roll <= r[1]:           # r[1] — это шанс (накопительный или прямой)
-                rarity = r[0]
-                min_c  = r[2]
-                max_c  = r[3]
-                color  = r[4]
-                emoji  = r[5]
-                break
+        if is_super_drop:
+            rarity = "🌟🔥 ЛЕГЕНДАРНЫЙ СУПЕР-ДРОП!!!"
+            reward = random.randint(SUPER_DROP_MIN, SUPER_DROP_MAX)
+            color = 0xFF4500  # ярко-оранжевый для вау-эффекта
+            emoji = "🌟🔥"
+            title = "ЭПИЧЕСКИЙ ДРОП!!!"
+
         else:
-            # Сработает, если roll > максимального шанса в RARITIES
-            print(f"Daily warning: roll {roll} не попал ни в одну редкость → дефолт 'Обычная'")
+            # Обычная логика редкостей
+            rarity = "Обычная"
+            min_c = 15
+            max_c = 35
+            color = 0xA8A8A8
+            emoji = "🪙"
 
-        # Теперь гарантированно есть значения
-        reward = random.randint(min_c, max_c)
+            for r in RARITIES:
+                if roll <= r[1]:
+                    rarity = r[0]
+                    min_c = r[2]
+                    max_c = r[3]
+                    color = r[4]
+                    emoji = r[5]
+                    break
 
-        # Проверка на стрик (если забирал вчера)
+            reward = random.randint(min_c, max_c)
+            title = f"{emoji} {rarity} награда!"
+
+        # Стрик-бонус (10%)
+        bonus = 0
         if last > 0:
             last_date = datetime.fromtimestamp(last, tz=timezone.utc).date()
             today_date = datetime.now(timezone.utc).date()
             if (today_date - last_date).days == 1:
-                bonus = int(reward * 0.1)          # 10%
+                bonus = int(reward * 0.1)
                 reward += bonus
 
         # Начисляем
@@ -3580,39 +3684,46 @@ async def daily(ctx: commands.Context):
         economy_data[user_id]["last_daily"] = now
         save_economy()
 
-        # ──────────────── Формируем embed ────────────────
+        # Формируем embed
         embed = discord.Embed(
-            title=f"{emoji} {rarity} награда!",
+            title=title,
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
             color=color,
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        
-        embed.add_field(
-            name="📊 Детали", 
-            value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}–{max_c} {ECONOMY_EMOJIS['coin']}", 
-            inline=True
-        )
-        
+
+        if is_super_drop:
+            embed.add_field(
+                name="🎉 СУПЕР-ДРОП!",
+                value=f"Ты словил легендарный бонус!\nШанс был всего **{SUPER_DROP_CHANCE}%** 🔥",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📊 Детали",
+                value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}–{max_c} {ECONOMY_EMOJIS['coin']}",
+                inline=True
+            )
+
         if bonus > 0:
             embed.add_field(
-                name="🔥 Стрик", 
-                value=f"+{format_number(bonus)} (10%)", 
+                name="🔥 Стрик",
+                value=f"+{format_number(bonus)} (10%)",
                 inline=True
             )
 
         if tax > 0:
             embed.add_field(
-                name=f"{ECONOMY_EMOJIS['tax']} Налог", 
-                value=f"**-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}", 
+                name=f"{ECONOMY_EMOJIS['tax']} Налог",
+                value=f"**-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}",
                 inline=False
             )
 
         embed.set_footer(
             text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}"
         )
-        
+
         await ctx.send(embed=embed, ephemeral=True)
 
     except Exception as e:
@@ -3668,6 +3779,59 @@ async def top(ctx: commands.Context):
         
     except Exception as e:
         await send_error_embed(ctx, str(e))
+
+@bot.hybrid_command(name="shop", description="🛒 Магазин бустов и ролей")
+async def shop(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🛒 Магазин MortisPlay",
+        description="Купи бусты и привилегии за монеты!",
+        color=COLORS["economy"]
+    )
+    for key, item in SHOP_ITEMS.items():
+        embed.add_field(
+            name=f"{ECONOMY_EMOJIS['gold']} {item['name']}",
+            value=f"**Цена:** {format_number(item['price'])} {ECONOMY_EMOJIS['coin']}\n"
+                  f"{item['description']}",
+            inline=False
+        )
+    embed.set_footer(text="Используй /buy <vip|multiplier>")
+    await ctx.send(embed=embed, ephemeral=True)
+
+
+@bot.hybrid_command(name="buy", description="Купить товар в магазине")
+@app_commands.describe(item="vip или multiplier")
+async def buy(ctx: commands.Context, item: str):
+    item = item.lower()
+    if item not in SHOP_ITEMS:
+        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Такого товара нет! Доступно: vip, multiplier", ephemeral=True)
+
+    shop_item = SHOP_ITEMS[item]
+    user_id = str(ctx.author.id)
+
+    if user_id not in economy_data or economy_data[user_id].get("balance", 0) < shop_item["price"]:
+        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно {format_number(shop_item['price'])}", ephemeral=True)
+
+    economy_data[user_id]["balance"] -= shop_item["price"]
+    save_economy()
+
+    if item == "vip":
+        role = discord.utils.get(ctx.guild.roles, name="VIP")  # или укажи ID роли
+        if role:
+            await ctx.author.add_roles(role)
+            # Временная роль (на 30 дней)
+            temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+
+        await ctx.send(f"{ECONOMY_EMOJIS['success']} Ты купил **VIP** на 1 месяц! 🎉\n"
+                       f"×2 монеты • VIP-чат • ×2 за войс • Приоритет тикетов", ephemeral=True)
+
+    elif item == "multiplier":
+        # Сохраняем множитель (можно добавить в economy_data["multiplier_end"])
+        if "multiplier_end" not in economy_data[user_id]:
+            economy_data[user_id]["multiplier_end"] = 0
+        economy_data[user_id]["multiplier_end"] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+        save_economy()
+
+        await ctx.send(f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀", ephemeral=True)        
 
 # ───────────────────────────────────────────────
 #   ЗАПУСК
