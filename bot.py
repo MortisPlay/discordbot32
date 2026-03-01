@@ -1140,46 +1140,52 @@ class FAQView(View):
         self.author = author
         self.add_item(FAQCategorySelect())
 
-class ShopView(View):
-    def __init__(self):
-        super().__init__(timeout=180)  # 3 минуты на выбор
+# ───────────────────────────────────────────────
+# Магазин с кнопками, подтверждением, проверкой "уже куплено" и обновлением баланса
+# ───────────────────────────────────────────────
 
-    @discord.ui.button(label="Купить VIP (10000 🪙)", style=discord.ButtonStyle.green, emoji="💎", custom_id="shop_vip")
-    async def buy_vip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_purchase(interaction, "vip")
+class ShopConfirmModal(Modal, title="Подтверждение покупки"):
+    def __init__(self, item_key: str, item_name: str, price: int, final_price: int):
+        super().__init__()
+        self.item_key = item_key
+        self.item_name = item_name
+        self.price = price
+        self.final_price = final_price
 
-    @discord.ui.button(label="Купить ×1.5 (1000 🪙)", style=discord.ButtonStyle.blurple, emoji="🚀", custom_id="shop_multiplier")
-    async def buy_multiplier(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_purchase(interaction, "multiplier")
+        self.add_item(TextInput(
+            label="Подтвердите покупку",
+            placeholder=f"Напишите 'подтверждаю' для покупки {item_name}",
+            style=discord.TextStyle.short,
+            required=True
+        ))
 
-    async def _handle_purchase(self, interaction: discord.Interaction, item_key: str):
-        if not interaction.user.guild_permissions.use_application_commands:  # минимальная проверка
-            return await interaction.response.send_message("❌ Нет доступа к командам", ephemeral=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.children[0].value.lower().strip() != "подтверждаю":
+            return await interaction.response.send_message("❌ Покупка отменена. Нужно написать 'подтверждаю'.", ephemeral=True)
 
-        shop_item = SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
+        shop_item = SHOP_ITEMS[self.item_key]
 
-        if user_id not in economy_data or economy_data[user_id].get("balance", 0) < shop_item["price"]:
-            bal = economy_data.get(user_id, {}).get("balance", 0)
+        # Финальная проверка баланса (на случай race-condition)
+        if user_id not in economy_data or economy_data[user_id].get("balance", 0) < self.final_price:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно {format_number(shop_item['price'])}, у вас {format_number(bal)}",
-                ephemeral=True
+                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Требуется {format_number(self.final_price)}", ephemeral=True
             )
 
         # Списание
-        economy_data[user_id]["balance"] -= shop_item["price"]
+        economy_data[user_id]["balance"] -= self.final_price
         save_economy()
 
-        if item_key == "vip":
+        # Выдача товара
+        if self.item_key == "vip":
             role = discord.utils.get(interaction.guild.roles, name="VIP")
             if role:
                 await interaction.user.add_roles(role)
                 temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
                 msg = f"{ECONOMY_EMOJIS['success']} **VIP** на 1 месяц куплен! 🎉\n×2 доход • VIP-чат • ×2 войс • приоритет"
             else:
-                msg = f"{ECONOMY_EMOJIS['error']} Роль VIP не найдена на сервере! Монеты списаны, но роль не выдана."
-
-        elif item_key == "multiplier":
+                msg = f"{ECONOMY_EMOJIS['error']} Роль VIP не найдена! Монеты списаны, но роль не выдана."
+        elif self.item_key == "multiplier":
             if "multiplier_end" not in economy_data[user_id]:
                 economy_data[user_id]["multiplier_end"] = 0
             economy_data[user_id]["multiplier_end"] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
@@ -1188,12 +1194,74 @@ class ShopView(View):
 
         await interaction.response.send_message(msg, ephemeral=True)
 
-        # Лог покупки (опционально)
+        # Лог
         await send_mod_log(
             title="🛒 Покупка в магазине",
-            description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {shop_item['name']}\n**Цена:** {format_number(shop_item['price'])}",
+            description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {self.item_name}\n**Цена:** {format_number(self.final_price)}",
             color=COLORS["economy"]
-        )        
+        )
+
+
+class ShopView(View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=300)  # 5 минут
+        self.author_id = author_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Это не ваше меню!", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Обновить баланс", style=discord.ButtonStyle.grey, emoji="🔄", row=1)
+    async def refresh_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        balance = economy_data.get(user_id, {}).get("balance", 0)
+        await interaction.response.send_message(
+            f"💰 Ваш текущий баланс: **{format_number(balance)}** {ECONOMY_EMOJIS['coin']}",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Купить VIP", style=discord.ButtonStyle.green, emoji="💎", custom_id="shop_vip", row=0)
+    async def buy_vip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, "vip")
+
+    @discord.ui.button(label="Купить ×1.5", style=discord.ButtonStyle.blurple, emoji="🚀", custom_id="shop_multiplier", row=0)
+    async def buy_multiplier(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, "multiplier")
+
+    async def _handle_button(self, interaction: discord.Interaction, item_key: str):
+        shop_item = SHOP_ITEMS[item_key]
+        user_id = str(interaction.user.id)
+        balance = economy_data.get(user_id, {}).get("balance", 0)
+
+        # Проверка "уже куплено"
+        already_owned = False
+        if item_key == "vip":
+            role = discord.utils.get(interaction.guild.roles, name="VIP")
+            already_owned = role in interaction.user.roles if role else False
+        elif item_key == "multiplier":
+            if "multiplier_end" in economy_data.get(user_id, {}):
+                end = economy_data[user_id]["multiplier_end"]
+                already_owned = end > datetime.now(timezone.utc).timestamp()
+
+        if already_owned:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['warning']} У вас уже есть **{shop_item['name']}**!", ephemeral=True
+            )
+
+        # Цена (пока без скидок, потом добавим)
+        price = shop_item["price"]
+
+        if balance < price:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно {format_number(price)}, у вас {format_number(balance)}",
+                ephemeral=True
+            )
+
+        # Модалка подтверждения
+        modal = ShopConfirmModal(item_key, shop_item["name"], price, price)
+        await interaction.response.send_modal(modal)        
 
 # ───────────────────────────────────────────────
 #   ИНИЦИАЛИЗАЦИЯ БОТА
@@ -3835,23 +3903,35 @@ async def shop(ctx: commands.Context):
         if not has_full_access(ctx.guild.id):
             return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
 
+        user_id = str(ctx.author.id)
+        balance = economy_data.get(user_id, {}).get("balance", 0)
+
         embed = discord.Embed(
             title="🛒 Магазин MortisPlay",
-            description="Выберите товар и нажмите кнопку ниже, чтобы купить",
+            description=f"**Ваш баланс:** {format_number(balance)} {ECONOMY_EMOJIS['coin']}\nВыберите товар ниже",
             color=COLORS["economy"]
         )
 
         for key, item in SHOP_ITEMS.items():
+            owned = False
+            if key == "vip":
+                role = discord.utils.get(ctx.guild.roles, name="VIP")
+                owned = role in ctx.author.roles if role else False
+            elif key == "multiplier":
+                if "multiplier_end" in economy_data.get(user_id, {}):
+                    end = economy_data[user_id]["multiplier_end"]
+                    owned = end > datetime.now(timezone.utc).timestamp()
+
+            status = "✅ Уже куплено" if owned else f"Цена: {format_number(item['price'])} {ECONOMY_EMOJIS['coin']}"
             embed.add_field(
-                name=f"{ECONOMY_EMOJIS['gold']} {item['name']}",
-                value=f"**Цена:** {format_number(item['price'])} {ECONOMY_EMOJIS['coin']}\n"
-                      f"{item['description']}",
+                name=f"{item['name']} {'(Куплено)' if owned else ''}",
+                value=f"{status}\n{item['description']}",
                 inline=False
             )
 
-        embed.set_footer(text="Нажмите кнопку, чтобы купить • Экономика v0.5.1")
+        embed.set_footer(text="Нажмите кнопку → подтвердите в модалке • Баланс обновляется кнопкой внизу")
 
-        view = ShopView()
+        view = ShopView(author_id=ctx.author.id)
         await ctx.send(embed=embed, view=view, ephemeral=True)
 
     except Exception as e:
