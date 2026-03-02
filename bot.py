@@ -4054,8 +4054,10 @@ async def shop(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
-@tester_only
-@bot.hybrid_command(name="season", description="Сезон, пропуск, квесты и магазин (тестовая команда)")
+@bot.hybrid_command(
+    name="season",
+    description="Сезон, пропуск, квесты и магазин (тестовая команда)"
+)
 @app_commands.describe(action="Что посмотреть")
 @app_commands.choices(action=[
     app_commands.Choice(name="Информация о сезоне", value="info"),
@@ -4064,6 +4066,7 @@ async def shop(ctx: commands.Context):
     app_commands.Choice(name="Магазин сезона", value="shop"),
     app_commands.Choice(name="Топ игроков сезона", value="top")
 ])
+@tester_only
 async def season(ctx: commands.Context, action: str = "info"):
     """Тестовая команда системы сезонов"""
     
@@ -4071,7 +4074,7 @@ async def season(ctx: commands.Context, action: str = "info"):
     embed = discord.Embed(
         title="🌟 Система сезонов (ТЕСТОВАЯ ВЕРСИЯ)",
         description=f"Привет, {user.mention}! Это пока только прототип.",
-        color=0xFFD700  # золотой для теста
+        color=0xFFD700
     )
     
     embed.add_field(
@@ -4089,7 +4092,7 @@ async def season(ctx: commands.Context, action: str = "info"):
     embed.set_thumbnail(url=user.display_avatar.url)
     embed.set_footer(text="Тестирование v0.1 • Только для тестеров")
     
-    await ctx.send(embed=embed, ephemeral=True)                
+    await ctx.send(embed=embed, ephemeral=True)               
 
 # ───────────────────────────────────────────────
 #   ЗАПУСК
