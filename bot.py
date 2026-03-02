@@ -1398,38 +1398,68 @@ async def voice_income_task():
         for vc in guild.voice_channels:
             if "afk" in vc.name.lower():
                 continue
-            for member in vc.members:
-                if member.bot:
-                    continue
+            
+            # Считаем активных участников заранее (не боты, не заглушенные)
+            active_members = [
+                m for m in vc.members
+                if not m.bot
+                and not (m.voice.mute or m.voice.self_mute or m.voice.self_deaf or m.voice.deaf)
+            ]
+            
+            # Если меньше 2 активных — доход никому не идёт
+            if len(active_members) < 2:
+                continue
+            
+            for member in active_members:
                 user_id = str(member.id)
                 if user_id not in economy_data:
                     continue
-                if member.voice.mute or member.voice.self_mute or member.voice.self_deaf or member.voice.deaf:
-                    continue  # заглушен → не получаем доход
-
+                
                 # Античит: минимальное время сессии
                 if user_id in voice_start_time:
                     minutes_in_voice = (now - voice_start_time[user_id]) / 60
                     if minutes_in_voice < VOICE_MIN_SESSION_MINUTES:
                         continue
-
+                    
                     # Начисляем
                     earn = VOICE_INCOME_PER_30MIN
                     if is_vip(member):
                         earn = int(earn * 2)  # VIP получает ×2
-
+                    
                     # Дневной лимит
                     if user_id not in daily_voice_earned:
                         daily_voice_earned[user_id] = 0
+                    
                     if daily_voice_earned[user_id] + earn > VOICE_DAILY_MAX:
-                        earn = VOICE_DAILY_MAX - daily_voice_earned[user_id]
-                        if earn <= 0:
+                        remaining = VOICE_DAILY_MAX - daily_voice_earned[user_id]
+                        if remaining <= 0:
+                            # Уведомляем только если лимит только что достигнут
+                            if daily_voice_earned[user_id] < VOICE_DAILY_MAX:
+                                try:
+                                    user = bot.get_user(int(user_id))
+                                    if user:
+                                        await user.send(
+                                            embed=discord.Embed(
+                                                title="🎤 Дневной лимит войса достигнут!",
+                                                description=(
+                                                    f"Сегодня вы заработали максимум **{VOICE_DAILY_MAX}** монет "
+                                                    f"в голосовых каналах.\nЗавтра в 00:00 UTC лимит обновится — "
+                                                    f"возвращайтесь! 🚀"
+                                                ),
+                                                color=0xF1C40F,
+                                                timestamp=datetime.now(timezone.utc)
+                                            ).set_footer(text="MortisPlay • Экономика")
+                                        )
+                                except:
+                                    pass  # ЛС закрыты или ошибка — пропускаем
                             continue
-
+                        earn = remaining
+                    
+                    # Начисляем
                     economy_data[user_id]["balance"] += earn
                     daily_voice_earned[user_id] += earn
-
-                    # Сохраняем
+                    
+                    # Сохраняем сразу после начисления
                     save_economy()    
 
 # ───────────────────────────────────────────────
@@ -3669,14 +3699,14 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
     try:
         if not has_full_access(ctx.guild.id):
             return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
-
+        
         member = member or ctx.author
         user_id = str(member.id)
-
+        
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
             save_economy()
-
+        
         tax = await apply_wealth_tax(user_id)
         bal = economy_data[user_id]["balance"]
         vault = economy_data.get("server_vault", 0)
@@ -3684,7 +3714,7 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
         users = [(k, v.get("balance", 0)) for k, v in economy_data.items() if k != "server_vault"]
         users.sort(key=lambda x: x[1], reverse=True)
         rank = next((i for i, (uid, _) in enumerate(users, 1) if uid == user_id), len(users) + 1)
-
+        
         now = datetime.now(timezone.utc).timestamp()
         last = economy_data[user_id].get("last_daily", 0)
         remaining = DAILY_COOLDOWN - (now - last)
@@ -3697,7 +3727,7 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
             progress = (now - last) / DAILY_COOLDOWN
             bar = create_progress_bar(int(progress * 100), 100)
             daily = f"⏳ До daily: **{hours}ч {minutes}мин**\n`{bar}` **{int(progress * 100)}%**"
-
+        
         embed = discord.Embed(
             title=f"{get_rank_emoji(bal)} Баланс {member.display_name}",
             color=COLORS["economy"],
@@ -3705,23 +3735,68 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
         )
         
         embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name=f"{ECONOMY_EMOJIS['balance']} Монеты", value=f"**`{format_number(bal)}`** {ECONOMY_EMOJIS['coin']}", inline=True)
+        
+        embed.add_field(
+            name=f"{ECONOMY_EMOJIS['balance']} Монеты",
+            value=f"**`{format_number(bal)}`** {ECONOMY_EMOJIS['coin']}",
+            inline=True
+        )
         embed.add_field(name="🏆 Место", value=f"**#{rank}** из {len(users)}", inline=True)
-        embed.add_field(name=f"{ECONOMY_EMOJIS['bank']} Казна", value=f"`{format_number(vault)}` {ECONOMY_EMOJIS['coin']}", inline=True)
-
+        embed.add_field(
+            name=f"{ECONOMY_EMOJIS['bank']} Казна",
+            value=f"`{format_number(vault)}` {ECONOMY_EMOJIS['coin']}",
+            inline=True
+        )
+        
         if tax > 0:
-            embed.add_field(name=f"{ECONOMY_EMOJIS['tax']} Налог", value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}", inline=False)
-
-        embed.add_field(name=f"{ECONOMY_EMOJIS['gift']} Ежедневный бонус", value=daily, inline=False)
+            embed.add_field(
+                name=f"{ECONOMY_EMOJIS['tax']} Налог",
+                value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}",
+                inline=False
+            )
+        
+        embed.add_field(
+            name=f"{ECONOMY_EMOJIS['gift']} Ежедневный бонус",
+            value=daily,
+            inline=False
+        )
+        
+        # Новое поле: заработок от войса сегодня
+        voice_today = daily_voice_earned.get(user_id, 0)
+        voice_progress = f"{format_number(voice_today)} / {VOICE_DAILY_MAX}"
+        if voice_today >= VOICE_DAILY_MAX:
+            voice_progress += " (лимит достигнут)"
+        embed.add_field(
+            name="🎤 Заработано в голосе сегодня",
+            value=f"**{voice_progress}** {ECONOMY_EMOJIS['coin']}",
+            inline=True
+        )
+        
+        # Новое поле: активный буст ×1.5
+        if "multiplier_end" in economy_data[user_id]:
+            end = economy_data[user_id]["multiplier_end"]
+            if end > now:
+                remaining_sec = int(end - now)
+                remaining_h = remaining_sec // 3600
+                remaining_m = (remaining_sec % 3600) // 60
+                embed.add_field(
+                    name="🚀 Активный буст ×1.5",
+                    value=f"Действует на сообщения и daily\nОсталось: **{remaining_h}ч {remaining_m}мин**",
+                    inline=True
+                )
         
         inv = economy_data[user_id].get("investments", [])
         active = sum(1 for i in inv if i["end_time"] > now)
         if active:
-            embed.add_field(name=f"{ECONOMY_EMOJIS['investment']} Инвестиции", value=f"Активно: **{active}**", inline=False)
-
+            embed.add_field(
+                name=f"{ECONOMY_EMOJIS['investment']} Инвестиции",
+                value=f"Активно: **{active}**",
+                inline=False
+            )
+        
         embed.set_footer(text=f"ID: {member.id}", icon_url=bot.user.display_avatar.url)
         await ctx.send(embed=embed, ephemeral=True)
-
+    
     except Exception as e:
         await send_error_embed(ctx, str(e))
 
