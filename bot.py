@@ -3928,9 +3928,14 @@ async def top(ctx: commands.Context):
         if not has_full_access(ctx.guild.id):
             return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
 
-        users = [(uid, data.get("balance", 0)) for uid, data in economy_data.items() 
-                if uid != "server_vault" and data.get("balance", 0) > 0]
-        
+        # Правильная фильтрация: только строковые user_id и только те, у кого есть словарь с балансом > 0
+        users = []
+        for uid, data in economy_data.items():
+            if uid == "server_vault":
+                continue
+            if isinstance(data, dict) and "balance" in data and data["balance"] > 0:
+                users.append((uid, data["balance"]))
+
         if not users:
             return await ctx.send(f"{ECONOMY_EMOJIS['warning']} Пока нет пользователей с монетами!", ephemeral=True)
         
@@ -3958,7 +3963,7 @@ async def top(ctx: commands.Context):
         embed.description = text
         
         total = sum(b for _, b in users)
-        avg = total // len(users)
+        avg = total // len(users) if users else 0
         embed.add_field(
             name="📊 Статистика",
             value=f"**Всего монет:** {format_number(total)} {ECONOMY_EMOJIS['coin']}\n**Участников:** {len(users)}\n**Средний баланс:** {format_number(avg)} {ECONOMY_EMOJIS['coin']}",
@@ -3969,7 +3974,8 @@ async def top(ctx: commands.Context):
         await ctx.send(embed=embed, ephemeral=True)
         
     except Exception as e:
-        await send_error_embed(ctx, str(e))
+        await send_error_embed(ctx, f"Ошибка в /top: {str(e)}")
+        print(f"Ошибка в /top: {e}")
 
 @bot.hybrid_command(name="shop", description="🛒 Магазин бустов и ролей")
 async def shop(ctx: commands.Context):
