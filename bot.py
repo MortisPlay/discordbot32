@@ -170,6 +170,43 @@ COLORS = {
 # (весь код после настроек до запуска)
 
 # ───────────────────────────────────────────────
+#   РОЛЬ ДЛЯ ТЕСТИРОВАНИЯ НОВЫХ ФИЧ
+# ───────────────────────────────────────────────
+TESTER_ROLE_ID = 1478006121657794715  
+
+def is_tester(member: discord.Member) -> bool:
+    """Проверяет, есть ли у участника роль Тестировщик"""
+    if not member:
+        return False
+    return any(role.id == TESTER_ROLE_ID for role in member.roles)
+
+# ───────────────────────────────────────────────
+# ДЕКОРАТОР ДЛЯ КОМАНД ТОЛЬКО ДЛЯ ТЕСТИРОВЩИКОВ
+# ───────────────────────────────────────────────
+
+from functools import wraps
+
+def tester_only(func):
+    @wraps(func)
+    async def wrapper(ctx: commands.Context, *args, **kwargs):
+        if not is_tester(ctx.author):
+            embed = discord.Embed(
+                title="🔒 Доступ ограничен",
+                description=(
+                    "Эта команда пока доступна **только участникам с ролью Тестировщик**.\n\n"
+                    "Хочешь участвовать в тестировании новых фич? "
+                    "Напиши администратору или в канал для тестеров."
+                ),
+                color=0xE74C3C  # красный для акцента
+            )
+            embed.set_footer(text="Тестирование • MortisPlay")
+            await ctx.send(embed=embed, ephemeral=True)
+            return
+        
+        return await func(ctx, *args, **kwargs)
+    return wrapper
+
+# ───────────────────────────────────────────────
 #   ГЛОБАЛЬНЫЕ ДАННЫЕ
 # ───────────────────────────────────────────────
 economy_data = {}
@@ -4015,7 +4052,44 @@ async def shop(ctx: commands.Context):
         await ctx.send(embed=embed, view=view, ephemeral=True)
 
     except Exception as e:
-        await send_error_embed(ctx, str(e))        
+        await send_error_embed(ctx, str(e))
+
+@tester_only
+@bot.hybrid_command(name="season", description="Сезон, пропуск, квесты и магазин (тестовая команда)")
+@app_commands.describe(action="Что посмотреть")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Информация о сезоне", value="info"),
+    app_commands.Choice(name="Пропуск сезона", value="pass"),
+    app_commands.Choice(name="Задания", value="tasks"),
+    app_commands.Choice(name="Магазин сезона", value="shop"),
+    app_commands.Choice(name="Топ игроков сезона", value="top")
+])
+async def season(ctx: commands.Context, action: str = "info"):
+    """Тестовая команда системы сезонов"""
+    
+    user = ctx.author
+    embed = discord.Embed(
+        title="🌟 Система сезонов (ТЕСТОВАЯ ВЕРСИЯ)",
+        description=f"Привет, {user.mention}! Это пока только прототип.",
+        color=0xFFD700  # золотой для теста
+    )
+    
+    embed.add_field(
+        name="Выбранное действие",
+        value=f"**{action.upper()}**",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Статус",
+        value="Команда работает только для роли **Тестировщик**\n\nСкоро здесь будет:\n• Прогресс сезона\n• Ежедневные/еженедельные квесты\n• Награды\n• Магазин за сезонные очки",
+        inline=False
+    )
+    
+    embed.set_thumbnail(url=user.display_avatar.url)
+    embed.set_footer(text="Тестирование v0.1 • Только для тестеров")
+    
+    await ctx.send(embed=embed, ephemeral=True)                
 
 # ───────────────────────────────────────────────
 #   ЗАПУСК
