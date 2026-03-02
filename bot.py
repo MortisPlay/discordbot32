@@ -1748,8 +1748,7 @@ async def on_member_join(member):
                 timestamp=datetime.now(timezone.utc)
             )
             
-            embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_image(url="https://previews.dropbox.com/p/thumb/AC5dK-TO8xJQzl0oI-NX6IqBoNqT0eA9K7XWG6nPpiUOYxrbJKixPVv8qjMQq2cL2Ts4O3CC9wudZOA392lbiW4KVKfNc4aiMvX21JIMhMSR6W_9a2IfkvpjgSvOS8xl_K-p9sFbXGqPRP_0scmsCZNVMeEuwwiWz5k9GaqUE5H7Twu4-iTWt6S7vvJ0q0Pc6yrBPSisQa0sGM_nsXGYOzX97Qwf0rNFJOt2sqmDfXXHkUsRJL0QDbXYr5uhfaZ4JYoN18DOUcjLYziblYgaK8Xycwn3idfUJnmdaho3PSr3DA/p.png")  # Можно заменить на свой баннер
+            embed.set_thumbnail(url=member.display_avatar.url) 
             
             embed.add_field(name="📝 Имя", value=member.name, inline=True)
             embed.add_field(name="🆔 ID", value=f"`{member.id}`", inline=True)
