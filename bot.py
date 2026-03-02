@@ -170,6 +170,28 @@ COLORS = {
 # (весь код после настроек до запуска)
 
 # ───────────────────────────────────────────────
+# ТЕСТИРОВАНИЕ
+# ───────────────────────────────────────────────
+TEST_GUILD_ID = 1119831534086656052 # ← ВСТАВЬ СЮДА ID ТВОЕГО ТЕСТОВОГО СЕРВЕРА
+
+# ───────────────────────────────────────────────
+# ДЕКОРАТОР ДЛЯ ТЕСТИРОВАНИЯ (только тестовый сервер)
+# ───────────────────────────────────────────────
+from functools import wraps
+
+def test_only(func):
+    @wraps(func)
+    async def wrapper(ctx: commands.Context, *args, **kwargs):
+        if ctx.guild.id != TEST_GUILD_ID:
+            return await ctx.send(
+                "Эта команда пока тестируется **только на тестовом сервере**.\n"
+                "Присоединяйся туда, чтобы попробовать новые фичи!",
+                ephemeral=True
+            )
+        return await func(ctx, *args, **kwargs)
+    return wrapper
+
+# ───────────────────────────────────────────────
 #   ГЛОБАЛЬНЫЕ ДАННЫЕ
 # ───────────────────────────────────────────────
 economy_data = {}
@@ -1469,9 +1491,9 @@ async def voice_income_task():
 @bot.event
 async def on_ready():
     print(f"┌──────────────────────────────────────────────┐")
-    print(f"│  Залогинен как    {bot.user}  │")
-    print(f"│  ID               {bot.user.id}      │")
-    print(f"│  Время запуска    {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} │")
+    print(f"│ Залогинен как {bot.user} │")
+    print(f"│ ID {bot.user.id} │")
+    print(f"│ Время запуска {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} │")
     print(f"└──────────────────────────────────────────────┘")
 
     await bot.change_presence(
@@ -1479,22 +1501,33 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.watching, name="mortisplay.ru")
     )
 
-    try:
-        synced = await bot.tree.sync()
-        print(f"Команды синхронизированы: {len(synced)} шт")
-    except Exception as e:
-        print(f"Ошибка синхронизации: {e}")
+    # ───────────────────────────────────────────────
+    # СИНХРОНИЗАЦИЯ КОМАНД ТОЛЬКО НА ТЕСТОВОМ СЕРВЕРЕ
+    # ───────────────────────────────────────────────
 
     for guild in bot.guilds:
-        await guild.chunk()
+        if guild.id == TEST_GUILD_ID:
+            try:
+                synced = await bot.tree.sync(guild=guild)
+                print(f"Команды синхронизированы ТОЛЬКО на тестовом сервере {guild.name}: {len(synced)} шт")
+            except Exception as e:
+                print(f"Ошибка синхронизации на тестовом сервере: {e}")
+        else:
+            print(f"Пропущена синхронизация команд на {guild.name} (не тестовый сервер)")
+
+        # Проверка прав VIEW_AUDIT_LOG только на основном сервере
         if guild.id == FULL_ACCESS_GUILD_ID:
             bot_member = guild.get_member(bot.user.id)
             if bot_member:
                 perms = bot_member.guild_permissions
                 if not perms.view_audit_log:
-                    print(f"⚠️ НЕТ ПРАВА VIEW_AUDIT_LOG на сервере {guild.name}!")
+                    print(f"⚠️ НЕТ ПРАВА VIEW_AUDIT_LOG на основном сервере {guild.name}!")
                 else:
-                    print(f"✅ Право VIEW_AUDIT_LOG есть на сервере {guild.name}")
+                    print(f"✅ Право VIEW_AUDIT_LOG есть на основном сервере {guild.name}")
+
+    # Остальной код (chunk, views, задачи) остаётся без изменений
+    for guild in bot.guilds:
+        await guild.chunk()
 
     bot.add_view(TicketPanelView())
     bot.add_view(TicketControls())
@@ -2494,6 +2527,7 @@ async def on_guild_update(before, after):
 # ───────────────────────────────────────────────
 #   КОМАНДЫ
 # ───────────────────────────────────────────────
+
 
 @bot.hybrid_command(name="ping", description="Подробная информация о боте")
 async def ping(ctx: commands.Context):
@@ -4017,6 +4051,134 @@ async def shop(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, str(e))        
 
+# ───────────────────────────────────────────────
+# СИСТЕМА СЕЗОНОВ И ПРОПУСКА (ТЕСТОВАЯ ВЕРСИЯ)
+# ───────────────────────────────────────────────
+
+# Глобальные данные сезона (пока в памяти, потом сохраним в json)
+current_season = {
+    "name": "Рассветный туман",
+    "start_date": datetime.now(timezone.utc).timestamp(),
+    "duration_days": 60,
+    "end_date": datetime.now(timezone.utc).timestamp() + (60 * 86400),
+}
+
+# Кто купил премиум-пропуск (user_id: timestamp окончания сезона)
+premium_pass = {}  # {user_id: end_timestamp}
+
+@test_only  # ← защита: только тестовый сервер
+@bot.hybrid_command(name="season", description="Сезон, пропуск, квесты и магазин")
+@app_commands.describe(
+    action="Что посмотреть: info / pass / tasks / shop / top"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Информация о сезоне", value="info"),
+    app_commands.Choice(name="Статус пропуска / купить", value="pass"),
+    app_commands.Choice(name="Текущие квесты", value="tasks"),
+    app_commands.Choice(name="Магазин за кристаллы", value="shop"),
+    app_commands.Choice(name="Топ сезона", value="top")
+])
+async def season(ctx: commands.Context, action: str = "info"):
+    if ctx.guild.id != TEST_GUILD_ID:
+        return await ctx.send(
+            "Эта команда пока тестируется **только на тестовом сервере**.\n"
+            "Присоединяйся туда, чтобы попробовать новые фичи!",
+            ephemeral=True
+        )
+
+    user_id = str(ctx.author.id)
+
+    if action == "info":
+        days_left = int((current_season["end_date"] - datetime.now(timezone.utc).timestamp()) / 86400)
+        premium_status = "Активен" if user_id in premium_pass and premium_pass[user_id] > datetime.now(timezone.utc).timestamp() else "Не куплен"
+
+        embed = discord.Embed(
+            title=f"🌟 Сезон: {current_season['name']}",
+            description=f"Дней осталось: **{days_left} / 60**\n"
+                        f"Пропуск Премиум: **{premium_status}**\n"
+                        f"Конец сезона: <t:{int(current_season['end_date'])}:F>",
+            color=COLORS["economy"]
+        )
+        embed.set_footer(text="Купить пропуск: /season pass")
+        await ctx.send(embed=embed, ephemeral=True)
+
+    elif action == "pass":
+        if user_id in premium_pass and premium_pass[user_id] > datetime.now(timezone.utc).timestamp():
+            days_left = int((premium_pass[user_id] - datetime.now(timezone.utc).timestamp()) / 86400)
+            embed = discord.Embed(
+                title="💎 Твой Премиум Пропуск",
+                description=f"Активен до <t:{int(premium_pass[user_id])}:F>\nОсталось **{days_left} дней**",
+                color=0xFFD700
+            )
+            await ctx.send(embed=embed, ephemeral=True)
+            return
+
+        # Покупка
+        class PassConfirm(View):
+            @discord.ui.button(label="Купить за 10 000 🪙", style=discord.ButtonStyle.green)
+            async def buy_coins(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if interaction.user.id != ctx.author.id:
+                    return await interaction.response.send_message("Это не твоя команда!", ephemeral=True)
+
+                if economy_data.get(user_id, {}).get("balance", 0) < 10000:
+                    return await interaction.response.send_message(
+                        f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно 10 000 🪙", ephemeral=True
+                    )
+
+                economy_data[user_id]["balance"] -= 10000
+                premium_pass[user_id] = current_season["end_date"]
+                save_economy()
+
+                await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['success']} Премиум Пропуск куплен за 10 000 🪙!\n"
+                    f"Действует до конца сезона ({current_season['name']}) 🎉",
+                    ephemeral=True
+                )
+
+            @discord.ui.button(label="Купить за 100 💎", style=discord.ButtonStyle.blurple)
+            async def buy_crystals(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if interaction.user.id != ctx.author.id:
+                    return await interaction.response.send_message("Это не твоя команда!", ephemeral=True)
+
+                # Пока заглушка — кристаллы добавим позже
+                await interaction.response.send_message(
+                    "Покупка за кристаллы пока недоступна (добавим в следующем обновлении)",
+                    ephemeral=True
+                )
+
+        embed = discord.Embed(
+            title="💎 Купить Премиум Пропуск",
+            description="Премиум даёт +100% очков сезона, эксклюзивные награды и ускоренный прогресс!",
+            color=0xFFD700
+        )
+        embed.add_field(name="Цена", value="10 000 🪙 **или** 100 💎", inline=False)
+        embed.add_field(name="Что даёт", value="×2 монеты с квестов\nЭксклюзивные роли и бусты\nБольше кристаллов", inline=False)
+
+        await ctx.send(embed=embed, view=PassConfirm(), ephemeral=True)
+
+    elif action == "tasks":
+        embed = discord.Embed(
+            title="📋 Текущие квесты",
+            description="Пока квестов нет (добавим в следующем шаге)",
+            color=COLORS["economy"]
+        )
+        await ctx.send(embed=embed, ephemeral=True)
+
+    elif action == "shop":
+        embed = discord.Embed(
+            title="🛒 Сезонный магазин (за кристаллы)",
+            description="Пока пусто — добавим после квестов и уровней",
+            color=COLORS["economy"]
+        )
+        await ctx.send(embed=embed, ephemeral=True)
+
+    elif action == "top":
+        embed = discord.Embed(
+            title="🏆 Топ сезона",
+            description="Пока нет участников (добавим после квестов)",
+            color=COLORS["economy"]
+        )
+        await ctx.send(embed=embed, ephemeral=True)
 # ───────────────────────────────────────────────
 #   ЗАПУСК
 # ───────────────────────────────────────────────
