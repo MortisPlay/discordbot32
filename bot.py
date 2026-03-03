@@ -4384,15 +4384,16 @@ async def shop(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="season",
-    description="Сезон, пропуск, квесты, магазин и топ"
+    description="Сезон, пропуск, квесты, магазин, топ и помощь"
 )
 @app_commands.describe(action="Что посмотреть")
 @app_commands.choices(action=[
-    app_commands.Choice(name="Информация о сезоне", value="info"),
-    app_commands.Choice(name="Пропуск сезона",     value="pass"),
-    app_commands.Choice(name="Задания",            value="tasks"),
-    app_commands.Choice(name="Магазин сезона",     value="shop"),
-    app_commands.Choice(name="Топ игроков сезона", value="top")
+    app_commands.Choice(name="Информация о сезоне",     value="info"),
+    app_commands.Choice(name="Пропуск сезона",          value="pass"),
+    app_commands.Choice(name="Задания",                 value="tasks"),
+    app_commands.Choice(name="Магазин сезона",          value="shop"),
+    app_commands.Choice(name="Топ игроков сезона",      value="top"),
+    app_commands.Choice(name="Помощь по сезону",        value="help"),
 ])
 @tester_only
 async def season(ctx: commands.Context, action: str = "info"):
@@ -4413,17 +4414,16 @@ async def season(ctx: commands.Context, action: str = "info"):
     if user_id not in economy_data:
         economy_data[user_id] = {"balance": 0}
 
-    # Гарантируем наличие нужных полей
     economy_data[user_id].setdefault("season_points", 0)
     economy_data[user_id].setdefault("season_purchases", [])
 
-    # ─── Удобные переменные для всей функции ───
-    season_player = season_data[user_id]
-    season_xp       = season_player["season_xp"]
-    season_level    = season_player["season_level"]
-    season_points   = economy_data[user_id]["season_points"]
+    # ─── Удобные переменные ───
+    season_player    = season_data[user_id]
+    season_xp        = season_player["season_xp"]
+    season_level     = season_player["season_level"]
+    season_points    = economy_data[user_id]["season_points"]
     season_purchases = economy_data[user_id]["season_purchases"]
-    claimed_rewards = season_player["claimed_rewards"]
+    claimed_rewards  = season_player["claimed_rewards"]
 
     embed = discord.Embed(color=0x9B59B6)
 
@@ -4491,7 +4491,7 @@ async def season(ctx: commands.Context, action: str = "info"):
 
         view = SeasonShopView(author_id=ctx.author.id)
         await ctx.send(embed=embed, view=view, ephemeral=True)
-        return  # Важно! Чтобы не отправлять второй embed
+        return
 
     elif action == "pass":
         embed.title = "✨ Сезонный Пропуск"
@@ -4546,6 +4546,58 @@ async def season(ctx: commands.Context, action: str = "info"):
         )
         embed.set_footer(text="Обновляется каждые 30 минут • Скоро будет полный топ")
 
+    elif action == "help":
+        embed.title = "❓ Помощь по сезону"
+        embed.color = 0x3498DB
+        embed.description = (
+            f"**{ctx.author.mention}**, вот краткое руководство по сезону **{current_season['name']}**:\n\n"
+            "1. **Как зарабатывать опыт (XP)?**\n"
+            "   • Пиши сообщения → +3 XP (VIP: +6)\n"
+            "   • Будь в голосовом → +2 XP/мин (VIP: +4)\n"
+            "   • Выполняй ежедневку `/daily` → +150 XP (VIP: +300)\n"
+            "   • Делай ежедневные и еженедельные задания\n\n"
+
+            "2. **Что дают уровни?**\n"
+            "   Достигай уровней → получай автоматические награды (роли, бусты, косметику)\n"
+            "   Проверь следующие награды в `/season info`\n\n"
+
+            "3. **Сезонные очки (season points)**\n"
+            "   • Начисляются за задания и уровни\n"
+            "   • Трать в `/season shop` на бусты, роли, монеты и Premium Pass\n\n"
+
+            "4. **Premium Pass (сезонный пропуск)**\n"
+            "   • Пока можно купить только за реальные деньги (скоро — за очки)\n"
+            "   • Даёт +30% XP, эксклюзивные награды и приоритет\n"
+            "   Подробнее → `/season pass`\n\n"
+
+            "5. **Как посмотреть свой прогресс?**\n"
+            "   → `/season info` — уровень, XP, прогресс, следующая награда\n"
+            "   → `/season tasks` — актуальные задания\n"
+            "   → `/season shop` — магазин наград\n"
+            "   → `/season top` — скоро топ игроков\n"
+            "   → `/season help` — эта помощь\n\n"
+
+            "**Совет:** Пиши чаще, сиди в голосовых с друзьями и выполняй задания — "
+            "это самый быстрый способ забраться повыше в сезоне! 🚀"
+        )
+
+        embed.add_field(
+            name="Горячие команды",
+            value=(
+                "• `/season info` — твой прогресс\n"
+                "• `/season shop` — магазин\n"
+                "• `/season tasks` — задания\n"
+                "• `/season pass` — про пропуск\n"
+                "• `/season top` — топ (скоро)\n"
+                "• `/season help` — эта помощь"
+            ),
+            inline=False
+        )
+
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.set_footer(text="MortisPlay • Сезон v1 • Задавай вопросы модераторам!")
+
+    # Одна отправка для всех случаев, кроме shop (у него return)
     await ctx.send(embed=embed, ephemeral=True)
 
 @tasks.loop(minutes=10)
