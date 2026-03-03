@@ -4504,7 +4504,7 @@ async def season(ctx: commands.Context, action: str = "info"):
             "• Уникальный значок и рамка профиля\n"
             "• Приоритет в сезонных ивентах"
         )
-        embed.add_field(name="Стоимость", value="**2999** сезонных очков или **$9.99**", inline=False)
+        embed.add_field(name="Стоимость", value="**5000** MortisCoin🪙", inline=False)
         embed.add_field(name="Статус", value="Пока не приобретён", inline=True)
         embed.set_footer(text="Скоро появится кнопка покупки • Сезон v1")
 
@@ -4566,7 +4566,7 @@ async def season(ctx: commands.Context, action: str = "info"):
             "   • Трать в `/season shop` на бусты, роли, монеты и Premium Pass\n\n"
 
             "4. **Premium Pass (сезонный пропуск)**\n"
-            "   • Пока можно купить только за реальные деньги (скоро — за очки)\n"
+            "   • Купить можно за MortisCoin🪙\n"
             "   • Даёт +30% XP, эксклюзивные награды и приоритет\n"
             "   Подробнее → `/season pass`\n\n"
 
