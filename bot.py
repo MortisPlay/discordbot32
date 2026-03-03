@@ -126,6 +126,25 @@ RARITIES = [
     ("Эпическая", 9, 200, 350, 0x9B59B6, "🌟"),
     ("Легендарная", 1, 500,1000, 0xF1C40F, "🔥")
 ]
+
+LEVEL_EMOJIS = {
+    1: "🥚",      # новичок
+    2: "🪶",      # начинающий
+    5: "🔥",      # разогрелся
+    10: "⚡",     # заряжен
+    15: "🌟",     # звезда
+    20: "👑",     # король сезона
+    30: "💫",     # легенда
+    35: "🪐",     # бог сезона
+}
+
+# Если уровня нет в словаре — берём ближайший меньший
+def get_level_emoji(level: int) -> str:
+    for lvl in sorted(LEVEL_EMOJIS.keys(), reverse=True):
+        if level >= lvl:
+            return LEVEL_EMOJIS[lvl]
+    return "🥚"  # дефолт
+
 BAD_WORDS = [
     "пидор", "пидорас", "пидрила", "пидр", "гей", "хуесос", "ебанат", "дебил", "идиот",
     "тупой", "чмо", "чмошник", "сука", "блядь", "еблан", "мудак", "тварь", "урод"
@@ -215,6 +234,31 @@ current_season = {
         35: {"name": "Эксклюзивная роль 'Season Pioneer'", "type": "role", "cost": 4500, "role_id": None} # укажешь ID роли позже
     }
 }
+# ───────────────────────────────────────────────
+# ЕЖЕДНЕВНЫЕ ЗАДАНИЯ (простая реализация)
+# ───────────────────────────────────────────────
+DAILY_TASKS = {
+    "messages": {
+        "goal": 50,
+        "xp": 200,
+        "desc": "Отправить 50 сообщений"
+    },
+    "voice": {
+        "goal": 30,           # минут в голосе
+        "xp": 300,
+        "desc": "Провести 30 минут в голосе"
+    },
+    "daily": {
+        "goal": 1,
+        "xp": 100,
+        "desc": "Использовать команду /daily"
+    }
+}
+
+# Прогресс заданий за текущий день
+# Формат: {user_id: {"messages": 12, "voice": 45, "daily": 1, "date": "2026-03-03"}}
+daily_tasks_progress = {}
+
 def load_seasons():
     global season_data
     if os.path.exists(SEASONS_FILE):
@@ -233,6 +277,32 @@ def save_seasons():
         json.dump(season_data, f, ensure_ascii=False, indent=2)
 # Загружаем при старте
 load_seasons()
+
+# ───────────────────────────────────────────────
+# ЕЖЕДНЕВНЫЕ ЗАДАНИЯ — сохранение и загрузка
+# ───────────────────────────────────────────────
+DAILY_TASKS_FILE = "daily_tasks.json"
+
+def load_daily_tasks():
+    global daily_tasks_progress
+    if os.path.exists(DAILY_TASKS_FILE):
+        try:
+            with open(DAILY_TASKS_FILE, "r", encoding="utf-8") as f:
+                daily_tasks_progress = json.load(f)
+            print(f"[DAILY TASKS] Загружено {len(daily_tasks_progress)} прогрессов заданий")
+        except Exception as e:
+            print(f"Ошибка загрузки daily_tasks.json: {e}")
+            daily_tasks_progress = {}
+    else:
+        daily_tasks_progress = {}
+        print("[DAILY TASKS] Файл не найден → создан пустой")
+
+def save_daily_tasks():
+    with open(DAILY_TASKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(daily_tasks_progress, f, ensure_ascii=False, indent=2)
+
+# Загружаем при старте
+load_daily_tasks()
 # Для античита голосового дохода
 voice_start_time = {} # {user_id: timestamp}
 daily_voice_earned = {} # {user_id: сумма сегодня}
@@ -1215,59 +1285,144 @@ bot = commands.Bot(
 async def check_and_level_up(user_id: str, member: discord.Member = None):
     """
     Проверяет, достиг ли пользователь нового уровня в сезоне.
-    Если да — повышает уровень, сохраняет данные и отправляет уведомления.
+    Если да — повышает уровень, выдаёт награды, сохраняет данные и отправляет уведомления.
     """
     if user_id not in season_data:
         return
+
     player = season_data[user_id]
     current_xp = player["season_xp"]
     old_level = player["season_level"]
+
     # Вычисляем актуальный уровень
     new_level = 1
     while get_xp_for_level(new_level + 1) <= current_xp:
         new_level += 1
+
+    # Если уровень не вырос — выходим
     if new_level <= old_level:
         return
+
     # Уровень повышен
     player["season_level"] = new_level
+
+    # ─── Выдача наград за все новые уровни ───
+    claimed = player.setdefault("claimed_rewards", [])  # список строковых ID уровней
+
+    for lvl in range(old_level + 1, new_level + 1):
+        lvl_str = str(lvl)
+        if lvl_str in current_season["rewards"]:
+            reward = current_season["rewards"][lvl_str]
+
+            # Помечаем награду как полученную
+            if lvl_str not in claimed:
+                claimed.append(lvl_str)
+
+            # Выдаём награду в зависимости от типа
+            if reward["type"] == "role" and "role_id" in reward and reward["role_id"]:
+                try:
+                    # member может быть передан из события, но если нет — ищем по ID
+                    if not member:
+                        guild = bot.get_guild(FULL_ACCESS_GUILD_ID)  # или другой способ получить guild
+                        if guild:
+                            member = guild.get_member(int(user_id))
+
+                    if member:
+                        role = member.guild.get_role(int(reward["role_id"]))
+                        if role:
+                            await member.add_roles(role, reason=f"Сезонная награда — уровень {lvl}")
+                            # Уведомление в ЛС
+                            try:
+                                embed_role = discord.Embed(
+                                    title="🎉 Новая роль получена!",
+                                    description=(
+                                        f"Ты достиг **уровня {lvl}** в сезоне **{current_season['name']}**!\n"
+                                        f"Получена роль: **{role.name}**"
+                                    ),
+                                    color=0xFFD700,
+                                    timestamp=datetime.now(timezone.utc)
+                                )
+                                embed_role.set_thumbnail(url=member.display_avatar.url)
+                                embed_role.set_footer(text="MortisPlay • Сезон")
+                                await member.send(embed=embed_role)
+                            except discord.Forbidden:
+                                pass  # ЛС закрыты
+                            except Exception as e:
+                                print(f"[LEVEL-REWARD DM] Ошибка отправки ЛС роли {lvl}: {e}")
+                except Exception as e:
+                    print(f"Ошибка выдачи роли уровня {lvl} для {user_id}: {e}")
+
+            elif reward["type"] == "boost":
+                # Здесь можно реализовать временный буст (например +20% XP на неделю)
+                # Пример: добавить поле в player
+                # player["boost_end"] = datetime.now(timezone.utc).timestamp() + 7*86400
+                # player["boost_multiplier"] = 1.20
+                pass  # пока заглушка — добавь свою логику
+
+            elif reward["type"] == "cosmetic":
+                # Просто уведомление (значок, рамка и т.д. можно хранить в профиле)
+                try:
+                    user = bot.get_user(int(user_id))
+                    if not user:
+                        user = await bot.fetch_user(int(user_id))
+
+                    embed_cos = discord.Embed(
+                        title="✨ Косметическая награда!",
+                        description=(
+                            f"Уровень {lvl}: **{reward['name']}** получен!\n"
+                            f"Поздравляем в сезоне **{current_season['name']}**!"
+                        ),
+                        color=0x9B59B6,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    embed_cos.set_thumbnail(url=user.display_avatar.url)
+                    await user.send(embed=embed_cos)
+                except Exception as e:
+                    print(f"[COSMETIC DM] Ошибка для {user_id} уровня {lvl}: {e}")
+
+    # ─── Сохраняем изменения ───
     save_seasons()
-    # Логируем для отладки (можно потом убрать)
-    print(f"[LEVEL UP] {user_id} → уровень {old_level} → {new_level} (XP: {current_xp:,})")
-    # ─── ЛС уведомление ───
+
+    # ─── ЛС уведомление о новом уровне ───
     try:
         user = bot.get_user(int(user_id))
         if not user:
             user = await bot.fetch_user(int(user_id))
-        embed = discord.Embed(
+
+        embed_level = discord.Embed(
             title="🌟 Уровень повышен!",
-            description=f"Поздравляю! Ты достиг **уровня {new_level}** в сезоне **{current_season['name']}**!",
+            description=(
+                f"Поздравляю! Ты достиг **уровня {new_level}** в сезоне **{current_season['name']}**!\n"
+                "Проверь награды в `/season info` или в магазине сезона!"
+            ),
             color=0xFFD700,
             timestamp=datetime.now(timezone.utc)
         )
-        embed.add_field(
+        embed_level.add_field(
             name="Текущий опыт",
             value=f"{format_number(current_xp):,} XP",
             inline=True
         )
-        embed.add_field(
+        embed_level.add_field(
             name="До следующего",
             value=f"{format_number(get_xp_for_level(new_level + 1) - current_xp):,} XP",
             inline=True
         )
-        embed.set_thumbnail(url=user.display_avatar.url)
-        embed.set_footer(text="MortisPlay • Сезон")
-        await user.send(embed=embed)
+        embed_level.set_thumbnail(url=user.display_avatar.url)
+        embed_level.set_footer(text="MortisPlay • Сезон")
+        await user.send(embed=embed_level)
     except discord.Forbidden:
         print(f"[LEVEL-UP DM] Пользователь {user_id} закрыл ЛС")
     except Exception as e:
         print(f"[LEVEL-UP DM] Ошибка для {user_id}: {type(e).__name__}: {e}")
+
     # ─── Публичное объявление (если есть member) ───
     if member and member.guild:
         try:
             channel = (
                 member.guild.system_channel or
                 bot.get_channel(WELCOME_CHANNEL_ID) or
-                member.guild.text_channels[0] # запасной вариант — первый текстовый канал
+                member.guild.text_channels[0]  # запасной вариант
             )
             if channel:
                 await channel.send(
@@ -1490,9 +1645,29 @@ async def voice_season_xp_task():
                     season_data[user_id]["season_xp"] += xp_to_add
                     await check_and_level_up(user_id, member)
                     daily_season_xp_earned[user_id] += xp_to_add
+                                        # Прогресс голосового задания
+                    prog = daily_tasks_progress.setdefault(user_id, {
+                        "messages": 0, "voice": 0, "daily": 0, "date": today_str
+                    })
+                    if prog["date"] != today_str:
+                        prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
+                        daily_tasks_progress[user_id] = prog
+
+                    prog["voice"] += 5  # начисляем за каждые 5 минут
+                    if prog["voice"] >= DAILY_TASKS["voice"]["goal"]:
+                        extra_xp = DAILY_TASKS["voice"]["xp"]
+                        season_data[user_id]["season_xp"] += extra_xp
+                        await check_and_level_up(user_id, member)
+                        try:
+                            await member.send(
+                                f"✓ Выполнено задание **{DAILY_TASKS['voice']['desc']}** → +{extra_xp} XP!"
+                            )
+                        except:
+                            pass
                    
                     # Сохраняем
                     save_seasons()
+                    save_daily_tasks()
                     # Опционально: уведомление каждые 500 XP за сессию
                     if xp_to_add >= 500:
                         try:
@@ -1781,10 +1956,28 @@ async def on_message(message):
                 season_data[user_id]["season_xp"] += xp_per_msg
                 await check_and_level_up(user_id, message.author)
                 daily_season_xp_earned[user_id] += xp_per_msg
+                            # Прогресс ежедневного задания "messages"
+            prog = daily_tasks_progress.setdefault(user_id, {
+                "messages": 0, "voice": 0, "daily": 0, "date": today_str
+            })
+            if prog["date"] != today_str:
+                prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
+                daily_tasks_progress[user_id] = prog
+
+            prog["messages"] += 1
+            if prog["messages"] == DAILY_TASKS["messages"]["goal"]:
+                extra_xp = DAILY_TASKS["messages"]["xp"]
+                season_data[user_id]["season_xp"] += extra_xp
+                await check_and_level_up(user_id, message.author)
+                await message.channel.send(
+                    f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
+                    delete_after=10
+                )
                 print(f"[XP SUCCESS] +{xp_per_msg} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
 
             save_economy()
             save_seasons()
+            save_daily_tasks()
 
     # В самом конце обрабатываем команды
     await bot.process_commands(message)
@@ -3704,47 +3897,58 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
    
     except Exception as e:
         await send_error_embed(ctx, str(e))
+
 @bot.hybrid_command(name="daily", description="🎁 Ежедневный бонус")
 async def daily(ctx: commands.Context):
     try:
         if not has_full_access(ctx.guild.id):
             return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+
         user_id = str(ctx.author.id)
         now = datetime.now(timezone.utc).timestamp()
+        today_str = datetime.now(timezone.utc).date().isoformat()
+
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+
         last = economy_data[user_id].get("last_daily", 0)
+
+        # Кулдаун
         if now - last < DAILY_COOLDOWN:
             remaining = int(DAILY_COOLDOWN - (now - last))
             hours = remaining // 3600
             minutes = (remaining % 3600) // 60
             progress = (now - last) / DAILY_COOLDOWN
             bar = create_progress_bar(int(progress * 100), 100)
-           
+
             embed = discord.Embed(
                 title=f"{ECONOMY_EMOJIS['time']} Daily на кулдауне",
                 description=f"Следующая через **{hours}ч {minutes}мин**",
                 color=COLORS["economy"]
             )
             embed.add_field(name="Прогресс", value=f"`{bar}` **{int(progress * 100)}%**", inline=False)
+            embed.set_footer(text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}")
             return await ctx.send(embed=embed, ephemeral=True)
+
+        # Налог (если есть)
         tax = await apply_wealth_tax(user_id)
-        # Шанс супер-дропа (2%)
+
+        # Шанс супер-дропа
         roll = random.randint(1, 100)
         is_super_drop = roll <= SUPER_DROP_CHANCE
+
         if is_super_drop:
-            rarity = "🌟🔥 ЛЕГЕНДАРНЫЙ СУПЕР-ДРОП!!!"
-            reward = random.randint(SUPER_DROP_MIN, SUPER_DROP_MAX)
-            color = 0xFF4500 # ярко-оранжевый для вау-эффекта
-            emoji = "🌟🔥"
             title = "ЭПИЧЕСКИЙ ДРОП!!!"
+            reward = random.randint(SUPER_DROP_MIN, SUPER_DROP_MAX)
+            color = 0xFF4500
+            emoji = "🌟🔥"
+            rarity_text = "🌟🔥 ЛЕГЕНДАРНЫЙ СУПЕР-ДРОП!!!"
         else:
-            # Обычная логика редкостей
             rarity = "Обычная"
-            min_c = 15
-            max_c = 35
+            min_c, max_c = 15, 35
             color = 0xA8A8A8
             emoji = "🪙"
+
             for r in RARITIES:
                 if roll <= r[1]:
                     rarity = r[0]
@@ -3753,9 +3957,12 @@ async def daily(ctx: commands.Context):
                     color = r[4]
                     emoji = r[5]
                     break
+
             reward = random.randint(min_c, max_c)
             title = f"{emoji} {rarity} награда!"
-        # Стрик-бонус (10%)
+            rarity_text = f"**Редкость:** {rarity} ({min_c}–{max_c} {ECONOMY_EMOJIS['coin']})"
+
+        # Стрик-бонус 10%
         bonus = 0
         if last > 0:
             last_date = datetime.fromtimestamp(last, tz=timezone.utc).date()
@@ -3763,39 +3970,13 @@ async def daily(ctx: commands.Context):
             if (today_date - last_date).days == 1:
                 bonus = int(reward * 0.1)
                 reward += bonus
-        # Начисляем
+
+        # Начисляем монеты
         economy_data[user_id]["balance"] += reward
         economy_data[user_id]["last_daily"] = now
         save_economy()
-                # ─── Сезонный XP за daily ───
-        daily_xp = current_season["daily_xp_bonus"] # 150 по умолчанию
-        if is_vip(ctx.author):
-            daily_xp = int(daily_xp * 2) # VIP получает ×2
-        # Проверка и сброс дневного лимита сезонного XP
-        today_str = datetime.now(timezone.utc).date().isoformat()
-        if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
-            daily_season_xp_earned[user_id] = 0
-            daily_season_xp_reset[user_id] = today_str
-        # Сколько ещё можно добавить сегодня
-        remaining_xp = current_season["max_daily_xp"] - daily_season_xp_earned.get(user_id, 0)
-        xp_to_add = min(daily_xp, remaining_xp)
-        if xp_to_add > 0:
-            season_data[user_id]["season_xp"] += xp_to_add
-            await check_and_level_up(user_id, ctx.author)
-            daily_season_xp_earned[user_id] += xp_to_add
-            save_seasons()
-            # Добавляем информацию в embed
-            embed.add_field(
-                name="🌟 Сезонный бонус",
-                value=f"+{xp_to_add} XP за daily (лимит сегодня: {daily_season_xp_earned[user_id]:,} / {current_season['max_daily_xp']:,})",
-                inline=False
-            )
-            # Опционально: уведомление, если почти лимит
-            if daily_season_xp_earned[user_id] >= current_season["max_daily_xp"] * 0.9:
-                embed.set_footer(
-                    text=f"Баланс: {format_number(economy_data[user_id]['balance'])} • Почти достигнут дневной лимит XP!"
-                )
-        # Формируем embed
+
+        # Создаём основной embed один раз
         embed = discord.Embed(
             title=title,
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
@@ -3803,6 +3984,8 @@ async def daily(ctx: commands.Context):
             timestamp=datetime.now(timezone.utc)
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
+
+        # Супер-дроп или обычная информация
         if is_super_drop:
             embed.add_field(
                 name="🎉 СУПЕР-ДРОП!",
@@ -3810,31 +3993,87 @@ async def daily(ctx: commands.Context):
                 inline=False
             )
         else:
-            embed.add_field(
-                name="📊 Детали",
-                value=f"**Редкость:** {rarity}\n**Диапазон:** {min_c}–{max_c} {ECONOMY_EMOJIS['coin']}",
-                inline=True
-            )
+            embed.add_field(name="📊 Детали", value=rarity_text, inline=True)
+
+        # Стрик
         if bonus > 0:
             embed.add_field(
                 name="🔥 Стрик",
                 value=f"+{format_number(bonus)} (10%)",
                 inline=True
             )
+
+        # Налог
         if tax > 0:
             embed.add_field(
                 name=f"{ECONOMY_EMOJIS['tax']} Налог",
                 value=f"**-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}",
                 inline=False
             )
-        embed.set_footer(
-            text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}"
-        )
+
+        # ─── Сезонный XP за daily ───
+        daily_xp = current_season["daily_xp_bonus"]
+        if is_vip(ctx.author):
+            daily_xp = int(daily_xp * 2)
+
+        if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
+            daily_season_xp_earned[user_id] = 0
+            daily_season_xp_reset[user_id] = today_str
+
+        remaining_xp = current_season["max_daily_xp"] - daily_season_xp_earned.get(user_id, 0)
+        xp_to_add = min(daily_xp, remaining_xp)
+
+        if xp_to_add > 0:
+            season_data[user_id]["season_xp"] += xp_to_add
+            await check_and_level_up(user_id, ctx.author)
+            daily_season_xp_earned[user_id] += xp_to_add
+
+            # Ежедневное задание /daily
+            prog = daily_tasks_progress.setdefault(user_id, {
+                "messages": 0, "voice": 0, "daily": 0, "date": today_str
+            })
+            if prog["date"] != today_str:
+                prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
+                daily_tasks_progress[user_id] = prog
+
+            if prog["daily"] == 0:
+                prog["daily"] = 1
+                extra_xp = DAILY_TASKS["daily"]["xp"]
+                season_data[user_id]["season_xp"] += extra_xp
+                await check_and_level_up(user_id, ctx.author)
+                embed.add_field(
+                    name="✓ Ежедневное задание",
+                    value=f"**{DAILY_TASKS['daily']['desc']}** → +{extra_xp} XP",
+                    inline=False
+                )
+
+            save_seasons()
+            save_daily_tasks()
+
+            embed.add_field(
+                name="🌟 Сезонный бонус",
+                value=f"+{xp_to_add} XP за daily (сегодня: {daily_season_xp_earned[user_id]:,} / {current_season['max_daily_xp']:,})",
+                inline=False
+            )
+
+            if daily_season_xp_earned[user_id] >= current_season["max_daily_xp"] * 0.9:
+                embed.set_footer(
+                    text=f"Баланс: {format_number(economy_data[user_id]['balance'])} • Почти достигнут лимит XP!"
+                )
+
+        # Финальный футер (если не переопределён выше)
+        if not embed.footer.text:
+            embed.set_footer(
+                text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}"
+            )
+
         await ctx.send(embed=embed, ephemeral=True)
+
     except Exception as e:
         await send_error_embed(ctx, str(e))
         print(f"❌ Ошибка в daily: {e}")
         traceback.print_exc()
+
 @bot.hybrid_command(name="top", description="🏆 Топ богачей")
 async def top(ctx: commands.Context):
     try:
@@ -3919,22 +4158,26 @@ async def shop(ctx: commands.Context):
         await ctx.send(embed=embed, view=view, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
+
 @bot.hybrid_command(
     name="season",
-    description="Сезон, пропуск, квесты и магазин"
+    description="Сезон, пропуск, квесты, магазин и топ"
 )
 @app_commands.describe(action="Что посмотреть")
 @app_commands.choices(action=[
     app_commands.Choice(name="Информация о сезоне", value="info"),
-    app_commands.Choice(name="Пропуск сезона", value="pass"),
-    app_commands.Choice(name="Задания", value="tasks"),
-    app_commands.Choice(name="Магазин сезона", value="shop"),
+    app_commands.Choice(name="Пропуск сезона",     value="pass"),
+    app_commands.Choice(name="Задания",            value="tasks"),
+    app_commands.Choice(name="Магазин сезона",     value="shop"),
     app_commands.Choice(name="Топ игроков сезона", value="top")
 ])
 @tester_only
 async def season(ctx: commands.Context, action: str = "info"):
+    await ctx.defer(ephemeral=True)  # чтобы не было долгого "thinking..."
+
     user_id = str(ctx.author.id)
-   
+
+    # Инициализация игрока, если его нет
     if user_id not in season_data:
         season_data[user_id] = {
             "season_xp": 0,
@@ -3943,85 +4186,162 @@ async def season(ctx: commands.Context, action: str = "info"):
             "claimed_rewards": []
         }
         save_seasons()
+
     player = season_data[user_id]
     xp = player["season_xp"]
     level = player["season_level"]
     points = player["season_points"]
+    claimed = player["claimed_rewards"]
+
     embed = discord.Embed(color=0x9B59B6)
+
     if action == "info":
-        # Используем ту же логику, что и в check_and_level_up
+        # ─── Вычисление текущего уровня и прогресса ───
         current_level = 1
         while get_xp_for_level(current_level + 1) <= xp:
             current_level += 1
-        xp_for_current_level = get_xp_for_level(current_level)
-        xp_for_next_level = get_xp_for_level(current_level + 1)
-        xp_progress = xp - xp_for_current_level
-        needed_for_next = xp_for_next_level - xp_for_current_level
-        if needed_for_next <= 0:
-            needed_for_next = 1
-        progress_percent = min(100, int((xp_progress / needed_for_next) * 100))
-        bar = create_progress_bar(xp_progress, needed_for_next, length=12)
-        embed.title = f"🌌 Сезон: {current_season['name']}"
+
+        xp_current = get_xp_for_level(current_level)
+        xp_next    = get_xp_for_level(current_level + 1)
+        progress   = xp - xp_current
+        needed     = xp_next - xp_current or 1
+        percent    = min(100, int((progress / needed) * 100))
+
+        bar = create_progress_bar(progress, needed, length=14)
+
+        emoji = get_level_emoji(current_level)
+
+        embed.title = f"{emoji} Сезон «{current_season['name']}» — Уровень {current_level}"
         embed.description = (
-            f"Текущий сезон идёт до **{current_season['end_date']}**.\n\n"
-            f"Собирай опыт, выполняй задания и получай эксклюзивные награды!"
+            f"**{ctx.author.mention}**, ты в эпичном сезоне **{current_season['name']}**!\n"
+            f"Сезон завершится **{current_season['end_date']}**.\n\n"
+            "Собирай опыт, выполняй задания и забирай крутые награды!"
         )
-        embed.add_field(name="Твой уровень", value=f"**{current_level}** → **{current_level + 1}**", inline=True)
-        embed.add_field(name="Опыт", value=f"**{format_number(xp)}** / **{format_number(xp_for_next_level)}** XP", inline=True)
-        embed.add_field(name="Прогресс до следующего уровня", value=f"`{bar}` **{progress_percent}%**", inline=False)
-        embed.add_field(name="Сезонные очки", value=f"**{format_number(points)}** очков", inline=True)
+
+        embed.add_field(
+            name=f"🏅 Текущий уровень",
+            value=f"**{current_level}** → **{current_level + 1}**",
+            inline=True
+        )
+        embed.add_field(
+            name="✨ Опыт",
+            value=f"**{format_number(xp)}** / **{format_number(xp_next)}** XP",
+            inline=True
+        )
+        embed.add_field(
+            name="Прогресс",
+            value=f"`{bar}` **{percent}%**",
+            inline=False
+        )
+
+        # Ближайшая награда
+        next_reward_lvl = None
+        for lvl_str in sorted(current_season["rewards"].keys(), key=int):
+            lvl = int(lvl_str)
+            if lvl > current_level and lvl_str not in claimed:
+                next_reward_lvl = lvl
+                break
+
+        if next_reward_lvl:
+            r = current_season["rewards"][str(next_reward_lvl)]
+            embed.add_field(
+                name=f"🎁 Следующая награда (ур. {next_reward_lvl})",
+                value=f"**{r['name']}**\nСтоимость: **{format_number(r['cost'])}** очков",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="🎉 Награды",
+                value="Все доступные награды уже получены!",
+                inline=False
+            )
+
+        embed.add_field(
+            name="🏆 Сезонные очки",
+            value=f"**{format_number(points)}**",
+            inline=True
+        )
+
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text="Участвуй в событиях и получай бонусы! • Сезон v1")
+        embed.set_footer(text=f"MortisPlay • Сезон v1 • ID: {user_id}")
+
     elif action == "pass":
         embed.title = "✨ Сезонный Пропуск"
-        embed.description = (
-            "Получи мгновенный доступ к эксклюзивным наградам!\n\n"
-            "**Преимущества пропуска:**\n"
-            "• +30% опыта\n"
-            "• Доступ к премиум-наградам\n"
-            "• Уникальный значок"
-        )
         embed.color = 0xFFD700
+        embed.description = (
+            "Получи **премиум-доступ** к сезону!\n\n"
+            "**Что даёт пропуск:**\n"
+            "• +30% к получаемому опыту\n"
+            "• Эксклюзивные награды\n"
+            "• Уникальный значок и рамка профиля\n"
+            "• Приоритет в сезонных ивентах"
+        )
         embed.add_field(name="Стоимость", value="**2999** сезонных очков или **$9.99**", inline=False)
-        embed.add_field(name="Статус", value="Пока не куплен", inline=True)
-        embed.set_footer(text="Купить пропуск → скоро появится кнопка")
+        embed.add_field(name="Статус", value="Пока не приобретён", inline=True)
+        embed.set_footer(text="Скоро появится кнопка покупки • Сезон v1")
+
     elif action == "tasks":
         embed.title = "📜 Ежедневные и еженедельные задания"
-        embed.description = "Выполняй задания — получай опыт и очки!"
         embed.color = 0x2ECC71
+        embed.description = "Выполняй задания каждый день — получай опыт и очки!"
+        
         embed.add_field(
-            name="Ежедневные",
-            value="• Отправить 50 сообщений — 200 XP\n"
-                  "• Провести 30 мин в голосе — 300 XP\n"
-                  "• Использовать /daily — 100 XP",
+            name="Ежедневные задания",
+            value=(
+                "• Отправить **50 сообщений** → **+200 XP**\n"
+                "• Провести **30 минут** в голосовом → **+300 XP**\n"
+                "• Использовать `/daily` → **+100 XP**"
+            ),
             inline=False
         )
         embed.add_field(
-            name="Еженедельные",
-            value="• Набрать 5000 XP за неделю — 1500 очков\n"
-                  "• Купить что-то в магазине — 800 очков",
+            name="Еженедельные задания",
+            value=(
+                "• Набрать **5000 XP** за неделю → **+1500 очков**\n"
+                "• Купить что-либо в магазине сезона → **+800 очков**"
+            ),
             inline=False
         )
         embed.set_footer(text="Обновление ежедневных заданий → 00:00 UTC")
+
     elif action == "shop":
         embed.title = "🛍 Магазин сезона"
         embed.description = f"У тебя **{format_number(points)}** сезонных очков"
         embed.color = 0xE67E22
-        for lvl, reward in current_season["rewards"].items():
-            status = "✅ Куплено" if str(lvl) in player["claimed_rewards"] else f"{format_number(reward['cost'])} очков"
+
+        has_unclaimed = False
+        for lvl_str, reward in sorted(current_season["rewards"].items(), key=lambda x: int(x[0])):
+            lvl = int(lvl_str)
+            status = "✅ Получено" if lvl_str in claimed else f"Стоимость: **{format_number(reward['cost'])}** очков"
+            if lvl_str not in claimed:
+                has_unclaimed = True
             embed.add_field(
                 name=f"Уровень {lvl} — {reward['name']}",
                 value=status,
                 inline=False
             )
-        embed.set_footer(text="Выбери награду → скоро будут кнопки покупки")
+
+        if not has_unclaimed:
+            embed.add_field(name="🎉", value="Все награды сезона уже получены!", inline=False)
+
+        embed.set_footer(text="Награды выдаются автоматически при достижении уровня")
+
     elif action == "top":
         embed.title = "🏆 Топ игроков сезона"
-        embed.description = "Скоро здесь будет топ-10 по очкам и уровням!"
+        embed.description = (
+            "Пока топ не реализован полностью.\n"
+            "Скоро здесь будет топ-10 по уровням и очкам!"
+        )
         embed.color = 0x3498DB
-        embed.add_field(name="Твой ранг", value="Пока не в топ-100", inline=False)
-        embed.set_footer(text="Обновляется каждые 30 минут")
-    await ctx.send(embed=embed, ephemeral=True)
+        embed.add_field(
+            name="Твой текущий ранг",
+            value="Пока не в топ-100 (нужно больше активности!)",
+            inline=False
+        )
+        embed.set_footer(text="Обновляется каждые 30 минут • Скоро будет полный топ")
+
+    await ctx.followup.send(embed=embed, ephemeral=True)
+
 @tasks.loop(minutes=10)
 async def autosave_seasons_task():
     save_seasons()
