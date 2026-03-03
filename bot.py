@@ -4130,16 +4130,54 @@ async def season(ctx: commands.Context, action: str = "info"):
 
     # ─── Эмбеды для разных действий ───
     if action == "info":
+        # ─── Расчёт прогресса до следующего уровня ───
+        # Примерная формула: xp_needed = 100 * level^1.5 (можно потом подкрутить)
+        xp_for_current_level = int(100 * (level ** 1.5))
+        xp_for_next_level = int(100 * ((level + 1) ** 1.5))
+        xp_needed_for_next = xp_for_next_level - xp_for_current_level
+        xp_progress = xp - xp_for_current_level
+        progress_percent = min(100, int((xp_progress / xp_needed_for_next) * 100)) if xp_needed_for_next > 0 else 100
+
+        bar = create_progress_bar(xp_progress, xp_needed_for_next, length=12)
+
         embed = discord.Embed(
-            title="🌌 Сезон: Восстание из мёртвых",
-            description="Текущий сезон идёт до **1 мая 2026**.\n\nСобирай опыт, выполняй задания и получай эксклюзивные награды!",
+            title=f"🌌 Сезон: {current_season['name']}",
+            description=(
+                f"Текущий сезон идёт до **{current_season['end_date']}**.\n\n"
+                f"Собирай опыт, выполняй задания и получай эксклюзивные награды!"
+            ),
             color=0x9B59B6  # фиолетовый, мистический
         )
-        embed.add_field(name="Твой прогресс", value=f"**Уровень:** {level}\n**Опыт:** {xp:,} XP", inline=True)
-        embed.add_field(name="Сезонные очки", value=f"**{points:,}** очков", inline=True)
-        embed.add_field(name="До конца сезона", value="<t:1640995200:R>", inline=False)  # замени timestamp на реальный конец
+
+        embed.add_field(
+            name="Твой уровень",
+            value=f"**{level}** → **{level + 1}**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Опыт",
+            value=f"{format_number(xp):,} / {format_number(xp_for_next_level):,} XP",
+            inline=True
+        )
+
+        embed.add_field(
+            name="Прогресс до следующего уровня",
+            value=f"`{bar}` **{progress_percent}%**",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Сезонные очки",
+            value=f"**{format_number(points)}** очков",
+            inline=True
+        )
+
+        # Можно добавить оставшееся время до конца сезона (если есть точная дата)
+        # embed.add_field(name="До конца сезона", value="<t:1743465600:R>", inline=True)  # пример unix timestamp
+
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text="Участвуй в событиях и получай бонусы!")
+        embed.set_footer(text="Участвуй в событиях и получай бонусы! • Сезон v1")
 
     elif action == "pass":
         embed = discord.Embed(
