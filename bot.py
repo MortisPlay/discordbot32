@@ -4331,7 +4331,6 @@ async def shop(ctx: commands.Context):
 async def season(ctx: commands.Context, action: str = "info"):
     user_id = str(ctx.author.id)
     
-    # Инициализация игрока, если его нет
     if user_id not in season_data:
         season_data[user_id] = {
             "season_xp": 0,
@@ -4346,21 +4345,24 @@ async def season(ctx: commands.Context, action: str = "info"):
     level = player["season_level"]
     points = player["season_points"]
 
-    embed = discord.Embed(color=0x9B59B6)  # базовый фиолетовый цвет
+    embed = discord.Embed(color=0x9B59B6)
 
     if action == "info":
-        # Расчёт прогресса
-        xp_for_current = int(100 * (level ** 1.5))
-        xp_for_next = int(100 * ((level + 1) ** 1.5))
-        xp_needed_for_next = xp_for_next - xp_for_current
-        
-        if xp_needed_for_next <= 0:
-            xp_needed_for_next = 1  # защита от деления на 0
-        
-        xp_progress = xp - xp_for_current
-        progress_percent = min(100, int((xp_progress / xp_needed_for_next) * 100))
-        
-        bar = create_progress_bar(xp_progress, xp_needed_for_next, length=12)
+        # Используем ту же логику, что и в check_and_level_up
+        current_level = 1
+        while get_xp_for_level(current_level + 1) <= xp:
+            current_level += 1
+
+        xp_for_current_level = get_xp_for_level(current_level)
+        xp_for_next_level   = get_xp_for_level(current_level + 1)
+        xp_progress         = xp - xp_for_current_level
+        needed_for_next     = xp_for_next_level - xp_for_current_level
+
+        if needed_for_next <= 0:
+            needed_for_next = 1
+
+        progress_percent = min(100, int((xp_progress / needed_for_next) * 100))
+        bar = create_progress_bar(xp_progress, needed_for_next, length=12)
 
         embed.title = f"🌌 Сезон: {current_season['name']}"
         embed.description = (
@@ -4368,26 +4370,11 @@ async def season(ctx: commands.Context, action: str = "info"):
             f"Собирай опыт, выполняй задания и получай эксклюзивные награды!"
         )
 
-        embed.add_field(
-            name="Твой уровень",
-            value=f"**{level}** → **{level + 1}**",
-            inline=True
-        )
-        embed.add_field(
-            name="Опыт",
-            value=f"**{format_number(xp)}** / **{format_number(xp_for_next)}** XP",
-            inline=True
-        )
-        embed.add_field(
-            name="Прогресс до следующего уровня",
-            value=f"`{bar}` **{progress_percent}%**",
-            inline=False
-        )
-        embed.add_field(
-            name="Сезонные очки",
-            value=f"**{format_number(points)}** очков",
-            inline=True
-        )
+        embed.add_field(name="Твой уровень", value=f"**{current_level}** → **{current_level + 1}**", inline=True)
+        embed.add_field(name="Опыт", value=f"**{format_number(xp)}** / **{format_number(xp_for_next_level)}** XP", inline=True)
+        embed.add_field(name="Прогресс до следующего уровня", value=f"`{bar}` **{progress_percent}%**", inline=False)
+        embed.add_field(name="Сезонные очки", value=f"**{format_number(points)}** очков", inline=True)
+
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         embed.set_footer(text="Участвуй в событиях и получай бонусы! • Сезон v1")
 
