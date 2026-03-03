@@ -84,6 +84,39 @@ SHOP_ITEMS = {
         "description": "×1.5 к доходу от сообщений и daily"
     }
 }
+# ───────────────────────────────────────────────
+# Магазин СЕЗОНА (за season_points)
+# ───────────────────────────────────────────────
+SEASON_SHOP_ITEMS = {
+    "xp_boost_24h": {
+        "name": "Удвоитель XP на 24 часа",
+        "cost": 1200,               # сезонные очки
+        "description": "×2 к сезонному опыту на сутки",
+        "type": "boost",
+        "duration_hours": 24
+    },
+    "vip_3d": {
+        "name": "VIP на 3 дня",
+        "cost": 2500,
+        "description": "Временная VIP-роль на 3 дня",
+        "type": "role",
+        "role_name": "VIP",
+        "duration_days": 3
+    },
+    "premium_pass": {
+        "name": "Premium Pass",
+        "cost": 5000,
+        "description": "Активация Premium Track сезона",
+        "type": "pass"
+    },
+    "coins_5000": {
+        "name": "5000 MortisCoin",
+        "cost": 3000,
+        "description": "Прямой перевод в основную валюту",
+        "type": "coins",
+        "amount": 5000
+    }
+}
 # НАСТРОЙКИ ДЛЯ FAQ
 FAQ_FILE = "faq.json"
 FAQ_CATEGORIES = {
@@ -1212,6 +1245,74 @@ class ShopConfirmModal(Modal, title="Подтверждение покупки")
             description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {self.item_name}\n**Цена:** {format_number(self.final_price)}",
             color=COLORS["economy"]
         )
+class SeasonShopConfirmModal(Modal, title="Подтверждение покупки"):
+    def __init__(self, item_key: str, item_name: str, price: int):
+        super().__init__()
+        self.item_key = item_key
+        self.item_name = item_name
+        self.price = price
+        self.add_item(TextInput(
+            label="Подтвердите покупку",
+            placeholder=f"Напишите 'подтверждаю' для покупки {item_name}",
+            style=discord.TextStyle.short,
+            required=True
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.children[0].value.lower().strip() != "подтверждаю":
+            return await interaction.response.send_message("❌ Покупка отменена.", ephemeral=True)
+
+        user_id = str(interaction.user.id)
+        item = SEASON_SHOP_ITEMS[self.item_key]
+
+        # Финальная проверка
+        if economy_data[user_id]["season_points"] < self.price:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно очков! (изменилось за время ожидания)",
+                ephemeral=True
+            )
+
+        # Списание
+        economy_data[user_id]["season_points"] -= self.price
+        economy_data[user_id].setdefault("season_purchases", []).append(self.item_key)
+        save_economy()
+
+        # Выдача награды
+        msg = ""
+        if item["type"] == "coins":
+            economy_data[user_id]["balance"] += item["amount"]
+            msg = f"✅ Получено **+{format_number(item['amount'])}** MortisCoin!"
+            save_economy()
+
+        elif item["type"] == "boost":
+            # Пока заглушка — можно добавить поле "xp_boost_end"
+            msg = f"✅ **{item['name']}** активирован!"
+
+        elif item["type"] == "role":
+            role = discord.utils.get(interaction.guild.roles, name=item["role_name"])
+            if role:
+                await interaction.user.add_roles(role)
+                # Временная роль
+                temp_roles.setdefault(user_id, {})[str(role.id)] = (
+                    datetime.now(timezone.utc).timestamp() + (item["duration_days"] * 86400)
+                )
+                msg = f"✅ Роль **{role.name}** выдана на {item['duration_days']} дня!"
+            else:
+                msg = f"{ECONOMY_EMOJIS['error']} Роль {item['role_name']} не найдена!"
+
+        elif item["type"] == "pass":
+            # Пока заглушка — потом активируем Premium Track
+            msg = "✅ Premium Pass активирован! (пока в разработке)"
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+        # Лог покупки
+        await send_mod_log(
+            title="🛒 Покупка в магазине сезона",
+            description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {self.item_name}\n**Цена:** {format_number(self.price)} сезонных очков",
+            color=COLORS["economy"]
+        )
+
 class ShopView(View):
     def __init__(self, author_id: int):
         super().__init__(timeout=300) # 5 минут
@@ -1262,6 +1363,127 @@ class ShopView(View):
         # Модалка подтверждения
         modal = ShopConfirmModal(item_key, shop_item["name"], price, price)
         await interaction.response.send_modal(modal)
+
+class SeasonShopView(View):
+    def __init__(self, author_id: int):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author_id
+
+    @discord.ui.button(label="Обновить баланс", style=discord.ButtonStyle.grey, emoji="🔄", row=1)
+    async def refresh_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_id = str(interaction.user.id)
+        points = economy_data.get(user_id, {}).get("season_points", 0)
+        await interaction.response.send_message(
+            f"🌟 Текущий баланс сезонных очков: **{format_number(points)}**",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Удвоитель XP 24ч", style=discord.ButtonStyle.green, row=0)
+    async def buy_xp_boost(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._buy_item(interaction, "xp_boost_24h")
+
+    @discord.ui.button(label="VIP на 3 дня", style=discord.ButtonStyle.green, row=0)
+    async def buy_vip_3d(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._buy_item(interaction, "vip_3d")
+
+    @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, row=0)
+    async def buy_premium_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._buy_item(interaction, "premium_pass")
+
+    @discord.ui.button(label="5000 MortisCoin", style=discord.ButtonStyle.green, row=0)
+    async def buy_coins_5000(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._buy_item(interaction, "coins_5000")
+
+    async def _buy_item(self, interaction: discord.Interaction, item_key: str):
+        item = SEASON_SHOP_ITEMS[item_key]
+        user_id = str(interaction.user.id)
+        points = economy_data[user_id]["season_points"]
+
+        if item_key in economy_data[user_id]["season_purchases"]:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['warning']} Ты уже купил **{item['name']}**!",
+                ephemeral=True
+            )
+
+        if points < item["cost"]:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно очков! Нужно {format_number(item['cost'])}, у тебя {format_number(points)}",
+                ephemeral=True
+            )
+
+        modal = SeasonConfirmModal(item_key, item["name"], item["cost"])
+        await interaction.response.send_modal(modal)
+
+
+class SeasonConfirmModal(Modal, title="Подтверждение покупки"):
+    def __init__(self, item_key: str, item_name: str, price: int):
+        super().__init__()
+        self.item_key = item_key
+        self.item_name = item_name
+        self.price = price
+        self.add_item(TextInput(
+            label="Подтвердите покупку",
+            placeholder="Напишите 'подтверждаю'",
+            style=discord.TextStyle.short,
+            required=True
+        ))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if self.children[0].value.lower().strip() != "подтверждаю":
+            return await interaction.response.send_message("❌ Покупка отменена.", ephemeral=True)
+
+        user_id = str(interaction.user.id)
+        item = SEASON_SHOP_ITEMS[self.item_key]
+
+        # Финальная проверка
+        if economy_data[user_id]["season_points"] < self.price:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно очков (изменилось)!",
+                ephemeral=True
+            )
+
+        # Списание
+        economy_data[user_id]["season_points"] -= self.price
+        economy_data[user_id]["season_purchases"].append(self.item_key)
+        save_economy()
+
+        # Выдача
+        msg = ""
+        if item["type"] == "coins":
+            economy_data[user_id]["balance"] += item["amount"]
+            save_economy()
+            msg = f"✅ +{format_number(item['amount'])} MortisCoin зачислено!"
+
+        elif item["type"] == "role":
+            role = discord.utils.get(interaction.guild.roles, name=item["role_name"])
+            if role:
+                await interaction.user.add_roles(role)
+                temp_roles.setdefault(user_id, {})[str(role.id)] = (
+                    datetime.now(timezone.utc).timestamp() + item["duration_days"] * 86400
+                )
+                msg = f"✅ Роль **{role.name}** выдана на {item['duration_days']} дня!"
+            else:
+                msg = f"{ECONOMY_EMOJIS['error']} Роль не найдена!"
+
+        elif item["type"] == "boost":
+            # Пока заглушка — можно добавить поле xp_boost_end
+            msg = f"✅ **{item['name']}** активирован!"
+
+        elif item["type"] == "pass":
+            # Пока заглушка
+            msg = "✅ Premium Pass активирован! (в разработке)"
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+        # Лог
+        await send_mod_log(
+            title="🛒 Покупка в магазине сезона",
+            description=f"**{interaction.user.mention}** купил **{self.item_name}** за {format_number(self.price)} сезонных очков",
+            color=COLORS["economy"]
+        )        
 # ───────────────────────────────────────────────
 # ИНИЦИАЛИЗАЦИЯ БОТА
 # ───────────────────────────────────────────────
@@ -4174,11 +4396,11 @@ async def shop(ctx: commands.Context):
 ])
 @tester_only
 async def season(ctx: commands.Context, action: str = "info"):
-    await ctx.defer(ephemeral=True)  # чтобы не было долгого "thinking..."
+    await ctx.defer(ephemeral=True)
 
     user_id = str(ctx.author.id)
 
-    # Инициализация игрока, если его нет
+    # ─── Инициализация данных ───
     if user_id not in season_data:
         season_data[user_id] = {
             "season_xp": 0,
@@ -4188,28 +4410,35 @@ async def season(ctx: commands.Context, action: str = "info"):
         }
         save_seasons()
 
-    player = season_data[user_id]
-    xp = player["season_xp"]
-    level = player["season_level"]
-    points = player["season_points"]
-    claimed = player["claimed_rewards"]
+    if user_id not in economy_data:
+        economy_data[user_id] = {"balance": 0}
+
+    # Гарантируем наличие нужных полей
+    economy_data[user_id].setdefault("season_points", 0)
+    economy_data[user_id].setdefault("season_purchases", [])
+
+    # ─── Удобные переменные для всей функции ───
+    season_player = season_data[user_id]
+    season_xp       = season_player["season_xp"]
+    season_level    = season_player["season_level"]
+    season_points   = economy_data[user_id]["season_points"]
+    season_purchases = economy_data[user_id]["season_purchases"]
+    claimed_rewards = season_player["claimed_rewards"]
 
     embed = discord.Embed(color=0x9B59B6)
 
     if action == "info":
-        # ─── Вычисление текущего уровня и прогресса ───
         current_level = 1
-        while get_xp_for_level(current_level + 1) <= xp:
+        while get_xp_for_level(current_level + 1) <= season_xp:
             current_level += 1
 
         xp_current = get_xp_for_level(current_level)
         xp_next    = get_xp_for_level(current_level + 1)
-        progress   = xp - xp_current
+        progress   = season_xp - xp_current
         needed     = xp_next - xp_current or 1
         percent    = min(100, int((progress / needed) * 100))
 
         bar = create_progress_bar(progress, needed, length=14)
-
         emoji = get_level_emoji(current_level)
 
         embed.title = f"{emoji} Сезон «{current_season['name']}» — Уровень {current_level}"
@@ -4219,27 +4448,14 @@ async def season(ctx: commands.Context, action: str = "info"):
             "Собирай опыт, выполняй задания и забирай крутые награды!"
         )
 
-        embed.add_field(
-            name=f"🏅 Текущий уровень",
-            value=f"**{current_level}** → **{current_level + 1}**",
-            inline=True
-        )
-        embed.add_field(
-            name="✨ Опыт",
-            value=f"**{format_number(xp)}** / **{format_number(xp_next)}** XP",
-            inline=True
-        )
-        embed.add_field(
-            name="Прогресс",
-            value=f"`{bar}` **{percent}%**",
-            inline=False
-        )
+        embed.add_field(name="🏅 Уровень", value=f"**{current_level}** → **{current_level + 1}**", inline=True)
+        embed.add_field(name="✨ Опыт", value=f"**{format_number(season_xp)}** / **{format_number(xp_next)}** XP", inline=True)
+        embed.add_field(name="Прогресс", value=f"`{bar}` **{percent}%**", inline=False)
 
-        # Ближайшая награда
         next_reward_lvl = None
         for lvl_str in sorted(current_season["rewards"].keys(), key=int):
             lvl = int(lvl_str)
-            if lvl > current_level and lvl_str not in claimed:
+            if lvl > current_level and lvl_str not in claimed_rewards:
                 next_reward_lvl = lvl
                 break
 
@@ -4251,20 +4467,31 @@ async def season(ctx: commands.Context, action: str = "info"):
                 inline=False
             )
         else:
+            embed.add_field(name="🎉 Награды", value="Все доступные награды уже получены!", inline=False)
+
+        embed.add_field(name="🏆 Сезонные очки", value=f"**{format_number(season_points)}**", inline=True)
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.set_footer(text=f"MortisPlay • Сезон v1 • ID: {user_id}")
+
+    elif action == "shop":
+        embed.title = "🛍 Магазин сезона"
+        embed.description = f"У тебя **{format_number(season_points)}** сезонных очков\nВыбери товар ниже"
+        embed.color = 0xE67E22
+
+        for item_id, item in SEASON_SHOP_ITEMS.items():
+            owned = item_id in season_purchases
+            status = "✅ Куплено" if owned else f"Цена: **{format_number(item['cost'])}** очков"
             embed.add_field(
-                name="🎉 Награды",
-                value="Все доступные награды уже получены!",
+                name=f"{item['name']} {'(Куплено)' if owned else ''}",
+                value=f"{status}\n{item['description']}",
                 inline=False
             )
 
-        embed.add_field(
-            name="🏆 Сезонные очки",
-            value=f"**{format_number(points)}**",
-            inline=True
-        )
+        embed.set_footer(text="Нажми кнопку → подтверди покупку")
 
-        embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text=f"MortisPlay • Сезон v1 • ID: {user_id}")
+        view = SeasonShopView(author_id=ctx.author.id)
+        await ctx.send(embed=embed, view=view, ephemeral=True)
+        return  # Важно! Чтобы не отправлять второй embed
 
     elif action == "pass":
         embed.title = "✨ Сезонный Пропуск"
@@ -4285,7 +4512,7 @@ async def season(ctx: commands.Context, action: str = "info"):
         embed.title = "📜 Ежедневные и еженедельные задания"
         embed.color = 0x2ECC71
         embed.description = "Выполняй задания каждый день — получай опыт и очки!"
-        
+
         embed.add_field(
             name="Ежедневные задания",
             value=(
@@ -4304,28 +4531,6 @@ async def season(ctx: commands.Context, action: str = "info"):
             inline=False
         )
         embed.set_footer(text="Обновление ежедневных заданий → 00:00 UTC")
-
-    elif action == "shop":
-        embed.title = "🛍 Магазин сезона"
-        embed.description = f"У тебя **{format_number(points)}** сезонных очков"
-        embed.color = 0xE67E22
-
-        has_unclaimed = False
-        for lvl_str, reward in sorted(current_season["rewards"].items(), key=lambda x: int(x[0])):
-            lvl = int(lvl_str)
-            status = "✅ Получено" if lvl_str in claimed else f"Стоимость: **{format_number(reward['cost'])}** очков"
-            if lvl_str not in claimed:
-                has_unclaimed = True
-            embed.add_field(
-                name=f"Уровень {lvl} — {reward['name']}",
-                value=status,
-                inline=False
-            )
-
-        if not has_unclaimed:
-            embed.add_field(name="🎉", value="Все награды сезона уже получены!", inline=False)
-
-        embed.set_footer(text="Награды выдаются автоматически при достижении уровня")
 
     elif action == "top":
         embed.title = "🏆 Топ игроков сезона"
