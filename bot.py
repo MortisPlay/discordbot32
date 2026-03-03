@@ -228,10 +228,10 @@ current_season = {
     "daily_xp_bonus": 150,
     "max_daily_xp": 1000,
     "rewards": {
-        5: {"name": "Редкий значок", "type": "cosmetic", "cost": 500},
-        10: {"name": "Сезонная рамка", "type": "cosmetic", "cost": 1200},
-        20: {"name": "×1.2 буст на неделю", "type": "boost", "cost": 2500},
-        35: {"name": "Эксклюзивная роль 'Season Pioneer'", "type": "role", "cost": 4500, "role_id": None} # укажешь ID роли позже
+        "5": {"name": "Редкий значок", "type": "cosmetic", "cost": 500},
+        "10": {"name": "Сезонная рамка", "type": "cosmetic", "cost": 1200},
+        "20": {"name": "×1.2 буст на неделю", "type": "boost", "cost": 2500},
+        "35": {"name": "Эксклюзивная роль 'Season Pioneer'", "type": "role", "cost": 4500, "role_id": None}
     }
 }
 # ───────────────────────────────────────────────
@@ -1310,11 +1310,13 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
     claimed = player.setdefault("claimed_rewards", [])  # список строковых ID уровней
 
     for lvl in range(old_level + 1, new_level + 1):
-        lvl_str = str(lvl)
-        if lvl_str in current_season["rewards"]:
-            reward = current_season["rewards"][lvl_str]
+        lvl_str = str(lvl)  # для claimed_rewards храним как строки
 
-            # Помечаем награду как полученную
+        # Проверяем, есть ли награда для этого уровня (ключ — int!)
+        if lvl in current_season["rewards"]:
+            reward = current_season["rewards"][lvl]
+
+            # Помечаем награду как полученную (в claimed храним строки)
             if lvl_str not in claimed:
                 claimed.append(lvl_str)
 
@@ -1323,7 +1325,7 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                 try:
                     # member может быть передан из события, но если нет — ищем по ID
                     if not member:
-                        guild = bot.get_guild(FULL_ACCESS_GUILD_ID)  # или другой способ получить guild
+                        guild = bot.get_guild(FULL_ACCESS_GUILD_ID)
                         if guild:
                             member = guild.get_member(int(user_id))
 
@@ -1331,6 +1333,7 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                         role = member.guild.get_role(int(reward["role_id"]))
                         if role:
                             await member.add_roles(role, reason=f"Сезонная награда — уровень {lvl}")
+
                             # Уведомление в ЛС
                             try:
                                 embed_role = discord.Embed(
@@ -1349,18 +1352,15 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                                 pass  # ЛС закрыты
                             except Exception as e:
                                 print(f"[LEVEL-REWARD DM] Ошибка отправки ЛС роли {lvl}: {e}")
+
                 except Exception as e:
                     print(f"Ошибка выдачи роли уровня {lvl} для {user_id}: {e}")
 
             elif reward["type"] == "boost":
-                # Здесь можно реализовать временный буст (например +20% XP на неделю)
-                # Пример: добавить поле в player
-                # player["boost_end"] = datetime.now(timezone.utc).timestamp() + 7*86400
-                # player["boost_multiplier"] = 1.20
-                pass  # пока заглушка — добавь свою логику
+                # Заглушка — можно добавить логику буста позже
+                pass
 
             elif reward["type"] == "cosmetic":
-                # Просто уведомление (значок, рамка и т.д. можно хранить в профиле)
                 try:
                     user = bot.get_user(int(user_id))
                     if not user:
@@ -1411,6 +1411,7 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
         embed_level.set_thumbnail(url=user.display_avatar.url)
         embed_level.set_footer(text="MortisPlay • Сезон")
         await user.send(embed=embed_level)
+
     except discord.Forbidden:
         print(f"[LEVEL-UP DM] Пользователь {user_id} закрыл ЛС")
     except Exception as e:
