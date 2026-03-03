@@ -4346,25 +4346,26 @@ async def season(ctx: commands.Context, action: str = "info"):
     level = player["season_level"]
     points = player["season_points"]
 
-    # ─── Эмбеды для разных действий ───
-    if action == "info":
-        # ─── Расчёт прогресса до следующего уровня ───
-        # Примерная формула: xp_needed = 100 * level^1.5 (можно потом подкрутить)
-        xp_for_current_level = int(100 * (level ** 1.5))
-        xp_for_next_level = int(100 * ((level + 1) ** 1.5))
-        xp_needed_for_next = xp_for_next_level - xp_for_current_level
-        xp_progress = xp - xp_for_current_level
-        progress_percent = min(100, int((xp_progress / xp_needed_for_next) * 100)) if xp_needed_for_next > 0 else 100
+    embed = discord.Embed(color=0x9B59B6)  # базовый фиолетовый цвет
 
+    if action == "info":
+        # Расчёт прогресса
+        xp_for_current = int(100 * (level ** 1.5))
+        xp_for_next = int(100 * ((level + 1) ** 1.5))
+        xp_needed_for_next = xp_for_next - xp_for_current
+        
+        if xp_needed_for_next <= 0:
+            xp_needed_for_next = 1  # защита от деления на 0
+        
+        xp_progress = xp - xp_for_current
+        progress_percent = min(100, int((xp_progress / xp_needed_for_next) * 100))
+        
         bar = create_progress_bar(xp_progress, xp_needed_for_next, length=12)
 
-        embed = discord.Embed(
-            title=f"🌌 Сезон: {current_season['name']}",
-            description=(
-                f"Текущий сезон идёт до **{current_season['end_date']}**.\n\n"
-                f"Собирай опыт, выполняй задания и получай эксклюзивные награды!"
-            ),
-            color=0x9B59B6  # фиолетовый, мистический
+        embed.title = f"🌌 Сезон: {current_season['name']}"
+        embed.description = (
+            f"Текущий сезон идёт до **{current_season['end_date']}**.\n\n"
+            f"Собирай опыт, выполняй задания и получай эксклюзивные награды!"
         )
 
         embed.add_field(
@@ -4372,67 +4373,64 @@ async def season(ctx: commands.Context, action: str = "info"):
             value=f"**{level}** → **{level + 1}**",
             inline=True
         )
-
         embed.add_field(
             name="Опыт",
-            value=f"{format_number(xp):,} / {format_number(xp_for_next_level):,} XP",
+            value=f"**{format_number(xp)}** / **{format_number(xp_for_next)}** XP",
             inline=True
         )
-
         embed.add_field(
             name="Прогресс до следующего уровня",
             value=f"`{bar}` **{progress_percent}%**",
             inline=False
         )
-
         embed.add_field(
             name="Сезонные очки",
             value=f"**{format_number(points)}** очков",
             inline=True
         )
-
-        # Можно добавить оставшееся время до конца сезона (если есть точная дата)
-        # embed.add_field(name="До конца сезона", value="<t:1743465600:R>", inline=True)  # пример unix timestamp
-
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         embed.set_footer(text="Участвуй в событиях и получай бонусы! • Сезон v1")
 
     elif action == "pass":
-        embed = discord.Embed(
-            title="✨ Сезонный Пропуск",
-            description="Получи мгновенный доступ к эксклюзивным наградам!\n\n**Преимущества пропуска:**\n• +30% опыта\n• Доступ к премиум-наградам\n• Уникальный значок",
-            color=0xFFD700
+        embed.title = "✨ Сезонный Пропуск"
+        embed.description = (
+            "Получи мгновенный доступ к эксклюзивным наградам!\n\n"
+            "**Преимущества пропуска:**\n"
+            "• +30% опыта\n"
+            "• Доступ к премиум-наградам\n"
+            "• Уникальный значок"
         )
+        embed.color = 0xFFD700
         embed.add_field(name="Стоимость", value="**2999** сезонных очков или **$9.99**", inline=False)
         embed.add_field(name="Статус", value="Пока не куплен", inline=True)
         embed.set_footer(text="Купить пропуск → скоро появится кнопка")
 
     elif action == "tasks":
-        embed = discord.Embed(
-            title="📜 Ежедневные и еженедельные задания",
-            description="Выполняй задания — получай опыт и очки!",
-            color=0x2ECC71
-        )
+        embed.title = "📜 Ежедневные и еженедельные задания"
+        embed.description = "Выполняй задания — получай опыт и очки!"
+        embed.color = 0x2ECC71
         embed.add_field(
             name="Ежедневные",
-            value="• Отправить 50 сообщений — 200 XP\n• Провести 30 мин в голосе — 300 XP\n• Использовать /daily — 100 XP",
+            value="• Отправить 50 сообщений — 200 XP\n"
+                  "• Провести 30 мин в голосе — 300 XP\n"
+                  "• Использовать /daily — 100 XP",
             inline=False
         )
         embed.add_field(
             name="Еженедельные",
-            value="• Набрать 5000 XP за неделю — 1500 очков\n• Купить что-то в магазине — 800 очков",
+            value="• Набрать 5000 XP за неделю — 1500 очков\n"
+                  "• Купить что-то в магазине — 800 очков",
             inline=False
         )
         embed.set_footer(text="Обновление ежедневных заданий → 00:00 UTC")
 
     elif action == "shop":
-        embed = discord.Embed(
-            title="🛍 Магазин сезона",
-            description=f"У тебя **{points:,}** сезонных очков",
-            color=0xE67E22
-        )
+        embed.title = "🛍 Магазин сезона"
+        embed.description = f"У тебя **{format_number(points)}** сезонных очков"
+        embed.color = 0xE67E22
+
         for lvl, reward in current_season["rewards"].items():
-            status = "✅ Куплено" if str(lvl) in player["claimed_rewards"] else f"{reward['cost']:,} очков"
+            status = "✅ Куплено" if str(lvl) in player["claimed_rewards"] else f"{format_number(reward['cost'])} очков"
             embed.add_field(
                 name=f"Уровень {lvl} — {reward['name']}",
                 value=status,
@@ -4441,12 +4439,9 @@ async def season(ctx: commands.Context, action: str = "info"):
         embed.set_footer(text="Выбери награду → скоро будут кнопки покупки")
 
     elif action == "top":
-        # Пока заглушка — потом сделаем реальный топ
-        embed = discord.Embed(
-            title="🏆 Топ игроков сезона",
-            description="Скоро здесь будет топ-10 по очкам и уровням!",
-            color=0x3498DB
-        )
+        embed.title = "🏆 Топ игроков сезона"
+        embed.description = "Скоро здесь будет топ-10 по очкам и уровням!"
+        embed.color = 0x3498DB
         embed.add_field(name="Твой ранг", value="Пока не в топ-100", inline=False)
         embed.set_footer(text="Обновляется каждые 30 минут")
 
