@@ -1,7 +1,7 @@
 {
   "765476979792150549": {
-    "balance": 848,
-    "last_daily": 1772438902.030675,
+    "balance": 866,
+    "last_daily": 1772527267.270752,
     "last_message": 0,
     "investments": [
       {
@@ -12,7 +12,9 @@
         "end_time": 1772578777.190449,
         "rate": 6.17
       }
-    ]
+    ],
+    "season_points": 0,
+    "season_purchases": []
   },
   "696486192778182716": {
     "balance": 1000,
