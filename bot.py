@@ -1549,42 +1549,45 @@ async def on_ready():
     autosave_seasons_task.start()
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
-    # Пропускаем модераторов и администраторов
-    if is_protected_from_automod(message.author):
-        return await bot.process_commands(message)
-    if bot.user in message.mentions:
-        await message.channel.send(f"{message.author.mention}, я тут! Используй `/help`")
+
     user_id = str(message.author.id)
     now = datetime.now(timezone.utc).timestamp()
-    # Анти-спам
-    spam_threshold = SPAM_THRESHOLD * (VIP_SPAM_MULTIPLIER if is_vip(message.author) else 1)
-    mention_limit = 4 * (VIP_MENTION_MULTIPLIER if is_vip(message.author) else 1)
-    if user_id not in spam_cache:
-        spam_cache[user_id] = []
-    spam_cache[user_id] = [t for t in spam_cache[user_id] if now - t < SPAM_TIME]
-    spam_cache[user_id].append(now)
-    # Спам
-    if len(spam_cache[user_id]) >= spam_threshold:
-        await message.delete()
-        await message.channel.send(f"{message.author.mention}, слишком быстро пишешь!", delete_after=8)
-        try:
-            await message.author.timeout(timedelta(minutes=10), reason="Анти-спам")
-            case_id = await create_case(message.author, bot.user, "Авто-мут (спам)", "Превышение лимита сообщений", "10 минут")
-            await send_punishment_log(
-                member=message.author,
-                punishment_type="🔇 Мут 10 минут",
-                duration="10 минут",
-                reason="Превышение лимита сообщений",
-                moderator=bot.user,
-                case_id=case_id
-            )
-        except:
-            pass
-        return
+
+    # ====================== АНТИ-СПАМ, ТОКСИЧНОСТЬ, МОДЕРАЦИЯ ======================
+    protected = is_protected_from_automod(message.author)
+
+    if not protected:
+        # Анти-спам
+        spam_threshold = SPAM_THRESHOLD * (VIP_SPAM_MULTIPLIER if is_vip(message.author) else 1)
+        mention_limit = 4 * (VIP_MENTION_MULTIPLIER if is_vip(message.author) else 1)
+
+        if user_id not in spam_cache:
+            spam_cache[user_id] = []
+        spam_cache[user_id] = [t for t in spam_cache[user_id] if now - t < SPAM_TIME]
+        spam_cache[user_id].append(now)
+
+        if len(spam_cache[user_id]) >= spam_threshold:
+            await message.delete()
+            await message.channel.send(f"{message.author.mention}, слишком быстро пишешь!", delete_after=8)
+            try:
+                await message.author.timeout(timedelta(minutes=10), reason="Анти-спам")
+                case_id = await create_case(message.author, bot.user, "Авто-мут (спам)", "Превышение лимита сообщений", "10 минут")
+                await send_punishment_log(
+                    member=message.author,
+                    punishment_type="🔇 Мут 10 минут",
+                    duration="10 минут",
+                    reason="Превышение лимита сообщений",
+                    moderator=bot.user,
+                    case_id=case_id
+                )
+            except:
+                pass
+            return
     # Масс-пинг
     mention_count = len(message.mentions) + len(message.role_mentions)
    
@@ -1736,10 +1739,10 @@ async def on_message(message):
                 pass
         await check_auto_punishment(message.author, reason)
         return
-        # Экономика + Сезонный XP
-    if has_full_access(message.guild.id):
-        user_id = str(message.author.id)
-        # Инициализация, если игрок новый
+    
+        # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
+    if has_full_access(message.guild.id) or message.author.id == OWNER_ID:
+        # Инициализация
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
         if user_id not in season_data:
@@ -1747,31 +1750,36 @@ async def on_message(message):
         if user_id not in daily_season_xp_earned:
             daily_season_xp_earned[user_id] = 0
             daily_season_xp_reset[user_id] = datetime.now(timezone.utc).date().isoformat()
-        now = datetime.now(timezone.utc).timestamp()
-        # ─── Сообщения ───
+
+        # Начисление за сообщение
         if now - economy_data[user_id].get("last_message", 0) >= MESSAGE_COOLDOWN:
-            # Обычная экономика (монеты)
+            # Монеты
             earn_coins = random.randint(1, 5)
             economy_data[user_id]["balance"] += earn_coins
             economy_data[user_id]["last_message"] = now
-            # Сезонный XP за сообщение
+
+            # Сезонный XP
             xp_per_msg = current_season["xp_per_message"]
             if is_vip(message.author):
-                xp_per_msg = int(xp_per_msg * 2) # VIP ×2
-            # Проверяем дневной лимит XP
+                xp_per_msg = int(xp_per_msg * 2)
+
             today_str = datetime.now(timezone.utc).date().isoformat()
             if daily_season_xp_reset.get(user_id) != today_str:
                 daily_season_xp_earned[user_id] = 0
                 daily_season_xp_reset[user_id] = today_str
+
             can_add_xp = daily_season_xp_earned[user_id] + xp_per_msg <= current_season["max_daily_xp"]
             if can_add_xp:
                 season_data[user_id]["season_xp"] += xp_per_msg
                 await check_and_level_up(user_id, message.author)
                 daily_season_xp_earned[user_id] += xp_per_msg
-                # Здесь можно добавить уровень-ап (см. ниже)
-            # else: лимит достигнут — можно отправить уведомление (опционально)
+
+                print(f"[XP SUCCESS] +{xp_per_msg} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
+
             save_economy()
             save_seasons()
+
+    # В самом конце обрабатываем команды
     await bot.process_commands(message)
 # ───────────────────────────────────────────────
 # ПРИВЕТСТВИЯ И ПРОЩАНИЯ
@@ -4034,6 +4042,18 @@ def get_current_level_and_progress(xp: int) -> tuple[int, int, int]:
     needed_for_next = xp_for_next - xp_for_current
    
     return level, progress_xp, needed_for_next
+
+# ───────────────────────────────────────────────
+# ПЕРЕОПРЕДЕЛЕНИЕ get_xp_for_level (правильная версия)
+# ───────────────────────────────────────────────
+def get_xp_for_level(level: int) -> int:
+    """
+    Возвращает общее количество XP, необходимое для достижения уровня level.
+    Уровень 1 = 0 XP, уровень 2 = 100×2^1.5 и т.д.
+    """
+    if level <= 1:
+        return 0
+    return int(100 * (level ** 1.5))
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
