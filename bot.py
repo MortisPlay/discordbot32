@@ -1561,45 +1561,49 @@ async def on_message(message):
     # ====================== АНТИ-СПАМ, ТОКСИЧНОСТЬ, МОДЕРАЦИЯ ======================
     protected = is_protected_from_automod(message.author)
 
+    # Объявляем переменные заранее, чтобы избежать UnboundLocalError
+    spam_threshold = SPAM_THRESHOLD
+    mention_limit = 4  # базовое значение
+
     if not protected:
-        # Анти-спам
-        spam_threshold = SPAM_THRESHOLD * (VIP_SPAM_MULTIPLIER if is_vip(message.author) else 1)
-        mention_limit = 4 * (VIP_MENTION_MULTIPLIER if is_vip(message.author) else 1)
+        spam_threshold *= (VIP_SPAM_MULTIPLIER if is_vip(message.author) else 1)
+        mention_limit   *= (VIP_MENTION_MULTIPLIER if is_vip(message.author) else 1)
 
-        if user_id not in spam_cache:
-            spam_cache[user_id] = []
-        spam_cache[user_id] = [t for t in spam_cache[user_id] if now - t < SPAM_TIME]
-        spam_cache[user_id].append(now)
+    if user_id not in spam_cache:
+        spam_cache[user_id] = []
+    spam_cache[user_id] = [t for t in spam_cache[user_id] if now - t < SPAM_TIME]
+    spam_cache[user_id].append(now)
 
-        if len(spam_cache[user_id]) >= spam_threshold:
-            await message.delete()
-            await message.channel.send(f"{message.author.mention}, слишком быстро пишешь!", delete_after=8)
-            try:
-                await message.author.timeout(timedelta(minutes=10), reason="Анти-спам")
-                case_id = await create_case(message.author, bot.user, "Авто-мут (спам)", "Превышение лимита сообщений", "10 минут")
-                await send_punishment_log(
-                    member=message.author,
-                    punishment_type="🔇 Мут 10 минут",
-                    duration="10 минут",
-                    reason="Превышение лимита сообщений",
-                    moderator=bot.user,
-                    case_id=case_id
-                )
-            except:
-                pass
-            return
+    if len(spam_cache[user_id]) >= spam_threshold:
+        await message.delete()
+        await message.channel.send(f"{message.author.mention}, слишком быстро пишешь!", delete_after=8)
+        try:
+            await message.author.timeout(timedelta(minutes=10), reason="Анти-спам")
+            case_id = await create_case(message.author, bot.user, "Авто-мут (спам)", "Превышение лимита сообщений", "10 минут")
+            await send_punishment_log(
+                member=message.author,
+                punishment_type="🔇 Мут 10 минут",
+                duration="10 минут",
+                reason="Превышение лимита сообщений",
+                moderator=bot.user,
+                case_id=case_id
+            )
+        except:
+            pass
+        return
+
     # Масс-пинг
     mention_count = len(message.mentions) + len(message.role_mentions)
-   
+
     if ("@everyone" in message.content or "@here" in message.content) and not message.author.guild_permissions.mention_everyone:
         await message.delete()
         await message.channel.send(f"{message.author.mention}, у тебя нет прав на массовые упоминания!", delete_after=8)
         return
-   
+
     if mention_count > mention_limit:
         await message.delete()
         await message.channel.send(f"{message.author.mention}, не спамь упоминаниями! (лимит: {mention_limit})", delete_after=8)
-       
+      
         if user_id not in warnings_data:
             warnings_data[user_id] = []
         warnings_data[user_id].append({
@@ -1608,10 +1612,11 @@ async def on_message(message):
             "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         })
         save_warnings()
-       
+      
         case_id = await create_case(message.author, bot.user, "Варн (авто)", f"Массовый пинг ({mention_count} упоминаний)")
         await check_auto_punishment(message.author, "Массовый пинг")
         return
+
     # Капс
     if len(message.content) > 15:
         upper_ratio = sum(1 for c in message.content if c.isupper()) / len(message.content)
@@ -1619,38 +1624,41 @@ async def on_message(message):
             await message.delete()
             await message.channel.send(f"{message.author.mention}, не кричи (капс)!", delete_after=8)
             return
+
     # Реклама
     if re.search(r"discord\.(gg|com/invite)/", message.content.lower()):
         await message.delete()
         await message.channel.send(f"{message.author.mention}, реклама запрещена!", delete_after=10)
         return
-        # Токсичность (улучшенная версия — мат с умом)
+
+    # Токсичность
     if is_toxic(message.content):
         await message.delete()
         user_id = str(message.author.id)
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        # Проверяем, когда было последнее нарушение (защита от спама)
+
         last_toxic = None
         for warn in warnings_data.get(user_id, []):
             if "токсичность" in warn.get("reason", "").lower():
                 last_toxic = datetime.strptime(warn["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 break
-        if last_toxic and (datetime.now(timezone.utc) - last_toxic).total_seconds() < 300: # 5 минут
-            # Слишком быстро — просто удаляем без варна
+
+        if last_toxic and (datetime.now(timezone.utc) - last_toxic).total_seconds() < 300:
             await message.channel.send(
                 f"{message.author.mention}, без оскорблений, пожалуйста 😅 (слишком быстро)",
                 delete_after=8
             )
             return
-        # Считаем только свежие нарушения токсичности
+
         toxic_count = sum(
             1 for w in warnings_data.get(user_id, [])
             if "токсичность" in w.get("reason", "").lower()
             and (datetime.now(timezone.utc) - datetime.strptime(w["time"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)).days < 7
         )
+
         reason = "Токсичность / личное оскорбление"
+
         if toxic_count == 0:
-            # Первое нарушение
             warnings_data.setdefault(user_id, []).append({
                 "moderator": "Автомодерация",
                 "reason": reason,
@@ -1673,8 +1681,8 @@ async def on_message(message):
                 moderator=bot.user,
                 case_id=case_id
             )
+
         elif toxic_count == 1:
-            # Второе → мут 30 минут
             warnings_data.setdefault(user_id, []).append({
                 "moderator": "Автомодерация",
                 "reason": reason,
@@ -1701,8 +1709,8 @@ async def on_message(message):
                 )
             except:
                 pass
+
         else:
-            # Третье и далее → мут 2 часа + лог
             warnings_data.setdefault(user_id, []).append({
                 "moderator": "Автомодерация",
                 "reason": reason,
@@ -1726,7 +1734,6 @@ async def on_message(message):
                     moderator=bot.user,
                     case_id=case_id
                 )
-                # Дополнительный лог модераторам с упоминанием
                 await send_mod_log(
                     title="⚠️ Многократная токсичность",
                     description=f"**Пользователь:** {message.author.mention}\n"
@@ -1737,10 +1744,11 @@ async def on_message(message):
                 )
             except:
                 pass
+
         await check_auto_punishment(message.author, reason)
         return
-    
-        # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
+
+    # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
     if has_full_access(message.guild.id) or message.author.id == OWNER_ID:
         # Инициализация
         if user_id not in economy_data:
@@ -1773,7 +1781,6 @@ async def on_message(message):
                 season_data[user_id]["season_xp"] += xp_per_msg
                 await check_and_level_up(user_id, message.author)
                 daily_season_xp_earned[user_id] += xp_per_msg
-
                 print(f"[XP SUCCESS] +{xp_per_msg} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
 
             save_economy()
