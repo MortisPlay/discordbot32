@@ -4341,7 +4341,7 @@ async def season(ctx: commands.Context, action: str = "info"):
         )
         embed.set_footer(text="Обновляется каждые 30 минут • Скоро будет полный топ")
 
-    await ctx.followup.send(embed=embed, ephemeral=True)
+    await ctx.send(embed=embed, ephemeral=True)
 
 @tasks.loop(minutes=10)
 async def autosave_seasons_task():
