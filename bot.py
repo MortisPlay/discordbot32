@@ -219,6 +219,49 @@ investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
 
+# ───────────────────────────────────────────────
+# СЕЗОННЫЕ ДАННЫЕ
+# ───────────────────────────────────────────────
+SEASONS_FILE = "seasons.json"
+season_data = {}           # {user_id: {"season_xp": 0, "season_level": 1, "season_points": 0, "claimed_rewards": []}}
+current_season = {
+    "id": "season_10",
+    "name": "Восстание из мертвых",
+    "start_date": "2025-12-01",
+    "end_date": "2026-03-01",
+    "xp_per_message": 3,
+    "xp_per_voice_minute": 2,
+    "daily_xp_bonus": 150,
+    "max_daily_xp": 1000,
+    "rewards": {
+        5: {"name": "Редкий значок", "type": "cosmetic", "cost": 500},
+        10: {"name": "Сезонная рамка", "type": "cosmetic", "cost": 1200},
+        20: {"name": "×1.2 буст на неделю", "type": "boost", "cost": 2500},
+        35: {"name": "Эксклюзивная роль 'Season Pioneer'", "type": "role", "cost": 4500, "role_id": None}  # укажешь ID роли позже
+    }
+}
+
+def load_seasons():
+    global season_data
+    if os.path.exists(SEASONS_FILE):
+        try:
+            with open(SEASONS_FILE, "r", encoding="utf-8") as f:
+                season_data = json.load(f)
+            print(f"[SEASONS] Загружено {len(season_data)} участников")
+        except Exception as e:
+            print(f"Ошибка загрузки seasons.json: {e}")
+            season_data = {}
+    else:
+        season_data = {}
+        print("[SEASONS] Файл не найден → создан пустой")
+
+def save_seasons():
+    with open(SEASONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(season_data, f, ensure_ascii=False, indent=2)
+
+# Загружаем при старте
+load_seasons()
+
 # Для античита голосового дохода
 voice_start_time = {}       # {user_id: timestamp}
 daily_voice_earned = {}     # {user_id: сумма сегодня}
@@ -1543,7 +1586,7 @@ async def on_ready():
     check_inactive_tickets_task.start()
     
     voice_income_task.start()
-
+    autosave_seasons_task.start()
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
 
@@ -4056,7 +4099,7 @@ async def shop(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="season",
-    description="Сезон, пропуск, квесты и магазин (тестовая команда)"
+    description="Сезон, пропуск, квесты и магазин"
 )
 @app_commands.describe(action="Что посмотреть")
 @app_commands.choices(action=[
@@ -4068,32 +4111,95 @@ async def shop(ctx: commands.Context):
 ])
 @tester_only
 async def season(ctx: commands.Context, action: str = "info"):
-    """Тестовая команда системы сезонов"""
+    user_id = str(ctx.author.id)
     
-    user = ctx.author
-    embed = discord.Embed(
-        title="🌟 Система сезонов (ТЕСТОВАЯ ВЕРСИЯ)",
-        description=f"Привет, {user.mention}! Это пока только прототип.",
-        color=0xFFD700
-    )
-    
-    embed.add_field(
-        name="Выбранное действие",
-        value=f"**{action.upper()}**",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="Статус",
-        value="Команда работает только для роли **Тестировщик**\n\nСкоро здесь будет:\n• Прогресс сезона\n• Ежедневные/еженедельные квесты\n• Награды\n• Магазин за сезонные очки",
-        inline=False
-    )
-    
-    embed.set_thumbnail(url=user.display_avatar.url)
-    embed.set_footer(text="Тестирование v0.1 • Только для тестеров")
-    
+    # Инициализация игрока, если его нет
+    if user_id not in season_data:
+        season_data[user_id] = {
+            "season_xp": 0,
+            "season_level": 1,
+            "season_points": 0,
+            "claimed_rewards": []
+        }
+        save_seasons()
+
+    player = season_data[user_id]
+    xp = player["season_xp"]
+    level = player["season_level"]
+    points = player["season_points"]
+
+    # ─── Эмбеды для разных действий ───
+    if action == "info":
+        embed = discord.Embed(
+            title="🌌 Сезон: Восстание из мёртвых",
+            description="Текущий сезон идёт до **1 мая 2026**.\n\nСобирай опыт, выполняй задания и получай эксклюзивные награды!",
+            color=0x9B59B6  # фиолетовый, мистический
+        )
+        embed.add_field(name="Твой прогресс", value=f"**Уровень:** {level}\n**Опыт:** {xp:,} XP", inline=True)
+        embed.add_field(name="Сезонные очки", value=f"**{points:,}** очков", inline=True)
+        embed.add_field(name="До конца сезона", value="<t:1640995200:R>", inline=False)  # замени timestamp на реальный конец
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.set_footer(text="Участвуй в событиях и получай бонусы!")
+
+    elif action == "pass":
+        embed = discord.Embed(
+            title="✨ Сезонный Пропуск",
+            description="Получи мгновенный доступ к эксклюзивным наградам!\n\n**Преимущества пропуска:**\n• +30% опыта\n• Доступ к премиум-наградам\n• Уникальный значок",
+            color=0xFFD700
+        )
+        embed.add_field(name="Стоимость", value="**2999** сезонных очков или **$9.99**", inline=False)
+        embed.add_field(name="Статус", value="Пока не куплен", inline=True)
+        embed.set_footer(text="Купить пропуск → скоро появится кнопка")
+
+    elif action == "tasks":
+        embed = discord.Embed(
+            title="📜 Ежедневные и еженедельные задания",
+            description="Выполняй задания — получай опыт и очки!",
+            color=0x2ECC71
+        )
+        embed.add_field(
+            name="Ежедневные",
+            value="• Отправить 50 сообщений — 200 XP\n• Провести 30 мин в голосе — 300 XP\n• Использовать /daily — 100 XP",
+            inline=False
+        )
+        embed.add_field(
+            name="Еженедельные",
+            value="• Набрать 5000 XP за неделю — 1500 очков\n• Купить что-то в магазине — 800 очков",
+            inline=False
+        )
+        embed.set_footer(text="Обновление ежедневных заданий → 00:00 UTC")
+
+    elif action == "shop":
+        embed = discord.Embed(
+            title="🛍 Магазин сезона",
+            description=f"У тебя **{points:,}** сезонных очков",
+            color=0xE67E22
+        )
+        for lvl, reward in current_season["rewards"].items():
+            status = "✅ Куплено" if str(lvl) in player["claimed_rewards"] else f"{reward['cost']:,} очков"
+            embed.add_field(
+                name=f"Уровень {lvl} — {reward['name']}",
+                value=status,
+                inline=False
+            )
+        embed.set_footer(text="Выбери награду → скоро будут кнопки покупки")
+
+    elif action == "top":
+        # Пока заглушка — потом сделаем реальный топ
+        embed = discord.Embed(
+            title="🏆 Топ игроков сезона",
+            description="Скоро здесь будет топ-10 по очкам и уровням!",
+            color=0x3498DB
+        )
+        embed.add_field(name="Твой ранг", value="Пока не в топ-100", inline=False)
+        embed.set_footer(text="Обновляется каждые 30 минут")
+
     await ctx.send(embed=embed, ephemeral=True)               
 
+@tasks.loop(minutes=10)
+async def autosave_seasons_task():
+    save_seasons()
+    print("[AUTO] Сезонные данные сохранены")
 # ───────────────────────────────────────────────
 #   ЗАПУСК
 # ───────────────────────────────────────────────
