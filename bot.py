@@ -4659,13 +4659,6 @@ async def season(ctx: commands.Context, action: str = "info"):
     has_premium      = economy_data.get(user_id, {}).get("premium_track_active", False)
     claimed_rewards  = season_player.get("claimed_rewards", [])
 
-    player = season_data[user_id]
-    season_xp = player["season_xp"]
-    season_level = player["season_level"]
-    season_points = economy_data[user_id]["season_points"]
-    has_premium = economy_data[user_id]["premium_track_active"]
-    claimed = player["claimed_rewards"]
-
     # ─── Цвета и атмосфера сезона ───
     BASE_COLOR = 0x2E1A47      # тёмно-фиолетовый (тьма)
     PREMIUM_COLOR = 0xFF2D55   # ярко-алый (кровь нежити)
