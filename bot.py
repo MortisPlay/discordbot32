@@ -4660,7 +4660,7 @@ async def season(ctx: commands.Context):
     # Для обычных пользователей — прогресс разработки
     if not is_tester(ctx.author):
         dev_progress = 61  # можешь менять
-        bar = create_progress_bar(dev_progress, 100, length=20)
+        bar = create_progress_bar(dev_progress, 61, length=20)
 
         embed.title = "🪦 Premium Track • В разработке"
         embed.description = (
