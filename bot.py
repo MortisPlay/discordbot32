@@ -4623,7 +4623,6 @@ async def shop(ctx: commands.Context):
     name="season",
     description="Восстание из мёртвых — твой путь к легенде"
 )
-@tester_only
 async def season(ctx: commands.Context):
     await ctx.defer(ephemeral=True)
 
