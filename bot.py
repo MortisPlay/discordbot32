@@ -1554,10 +1554,14 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
     current_xp = player["season_xp"]
     old_level = player["season_level"]
 
-    # Вычисляем актуальный уровень
+        # Вычисляем актуальный уровень, но не выше 30
     new_level = 1
-    while get_xp_for_level(new_level + 1) <= current_xp:
+    while get_xp_for_level(new_level + 1) <= current_xp and new_level < 30:
         new_level += 1
+
+    # Жёсткий лимит
+    if new_level > 30:
+        new_level = 30
 
     # Если уровень не вырос — выходим
     if new_level <= old_level:
@@ -1635,7 +1639,7 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                 except Exception as e:
                     print(f"[COSMETIC DM] Ошибка для {user_id} уровня {lvl}: {e}")
 
-    # ─── Специальная награда за 30 уровень ───
+        # ─── Специальная награда за 30 уровень ───
     if new_level >= 30 and "30" not in claimed:
         claimed.append("30")
 
@@ -1711,11 +1715,40 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
             except:
                 pass
 
-    # ─── Сохраняем изменения ───
+    # ─── Эксклюзивные награды Premium на промежуточных уровнях ───
+    # Этот блок ВНЕ зависимости от 30 уровня — награды выдаются при достижении любого из 5/10/15/20/25
+    if economy_data[user_id].get("premium_track_active", False):
+        premium_rewards = {
+            5:  {"coins": 300,  "msg": "+300 MortisCoin за ранний старт!"},
+            10: {"coins": 600,  "msg": "+600 MortisCoin • хороший темп!"},
+            15: {"coins": 1000, "msg": "+1000 MortisCoin • полпути к легенде!"},
+            20: {"coins": 1800, "msg": "+1800 MortisCoin • уже элита!"},
+            25: {"coins": 2500, "msg": "+2500 MortisCoin • почти максимум!"},
+        }
+
+        for lvl in range(old_level + 1, new_level + 1):
+            if lvl in premium_rewards:
+                rew = premium_rewards[lvl]
+                economy_data[user_id]["balance"] += rew["coins"]
+
+                try:
+                    user = bot.get_user(int(user_id))
+                    if user:
+                        await user.send(embed=discord.Embed(
+                            title=f"✨ Premium-награда — уровень {lvl}",
+                            description=rew["msg"],
+                            color=0xFFD700,
+                            timestamp=datetime.now(timezone.utc)
+                        ).set_thumbnail(url=user.display_avatar.url)
+                         .set_footer(text="MortisPlay • Сезон"))
+                except Exception as e:
+                    print(f"[PREMIUM REWARD DM] Не удалось отправить ЛС {user_id} за уровень {lvl}: {e}")
+
+    # Сохраняем изменения (один раз в конце — после всех начислений)
     save_seasons()
     save_economy()
 
-    # ─── ЛС уведомление о новом уровне (общее) ───
+        # ─── ЛС уведомление о новом уровне (общее) ───
     try:
         user = bot.get_user(int(user_id))
         if not user:
@@ -1724,7 +1757,8 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
         embed_level = discord.Embed(
             title="🌟 Уровень повышен!",
             description=(
-                f"Поздравляю! Ты достиг **уровня {new_level}** в сезоне **{current_season['name']}**!\n"
+                f"Поздравляю! Ты достиг **уровня {new_level}{' (максимум!)' if new_level == 30 else ''}** "
+                f"в сезоне **{current_season['name']}**!\n"
                 "Проверь награды в `/season info` или в магазине сезона!"
             ),
             color=0xFFD700,
@@ -1737,7 +1771,11 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
         )
         embed_level.add_field(
             name="До следующего",
-            value=f"{format_number(get_xp_for_level(new_level + 1) - current_xp):,} XP",
+            value=(
+                "Максимальный уровень достигнут! 🎉"
+                if new_level == 30 else
+                f"{format_number(get_xp_for_level(new_level + 1) - current_xp):,} XP"
+            ),
             inline=True
         )
         embed_level.set_thumbnail(url=user.display_avatar.url)
@@ -1759,7 +1797,8 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
             )
             if channel:
                 await channel.send(
-                    f"🎉 {member.mention} только что достиг **уровня {new_level}** в сезоне **{current_season['name']}**! 🚀"
+                    f"🎉 {member.mention} только что достиг **уровня {new_level}{' (максимум!)' if new_level == 30 else ''}** "
+                    f"в сезоне **{current_season['name']}**! 🚀"
                 )
         except Exception as e:
             print(f"[LEVEL-UP announce] Ошибка для {user_id}: {e}")
@@ -2035,6 +2074,48 @@ async def voice_season_xp_task():
                             )
                         except:
                             pass  # ЛС закрыты — ничего страшного
+
+@tasks.loop(hours=168)  # каждые 7 дней = 1 неделя
+async def weekly_premium_bonus():
+    now = datetime.now(timezone.utc)
+    
+    # Запускаем ТОЛЬКО если сейчас понедельник 00:00–00:29 UTC
+    # (запас на возможную небольшую задержку запуска задачи)
+    if now.weekday() != 0 or now.hour != 0:
+        return
+
+    count = 0
+    for user_id, data in list(economy_data.items()):
+        if user_id == "server_vault":
+            continue
+        if not data.get("premium_track_active", False):
+            continue
+            
+        data["balance"] = data.get("balance", 0) + 200
+        count += 1
+        
+        try:
+            user = bot.get_user(int(user_id))
+            if user:
+                await user.send(embed=discord.Embed(
+                    title="✨ Еженедельный Premium-бонус",
+                    description=(
+                        "+**200** MortisCoin\n\n"
+                        "Спасибо, что остаёшься с нами на Premium Track! 🚀\n"
+                        "Следующий бонус — через 7 дней."
+                    ),
+                    color=0xFFD700,
+                    timestamp=now
+                ).set_thumbnail(url=user.display_avatar.url)
+                 .set_footer(text="MortisPlay • Каждое воскресенье → понедельник 00:00 UTC"))
+        except Exception as e:
+            print(f"[WEEKLY BONUS DM] Не удалось отправить ЛС {user_id}: {e}")
+
+    if count > 0:
+        save_economy()
+        print(f"[WEEKLY PREMIUM] Выдано +200 монет {count} Premium-игрокам")
+    else:
+        print("[WEEKLY PREMIUM] Нет активных Premium-игроков")
 # ───────────────────────────────────────────────
 # СОБЫТИЯ
 # ───────────────────────────────────────────────
@@ -2075,6 +2156,7 @@ async def on_ready():
     voice_income_task.start()
     voice_season_xp_task.start()
     autosave_seasons_task.start()
+    weekly_premium_bonus.start()  # ← вот сюда
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
 
@@ -4587,8 +4669,9 @@ async def season(ctx: commands.Context, action: str = "info"):
 
     if action == "info":
         current_level = 1
-        while get_xp_for_level(current_level + 1) <= season_xp and current_level < 30:
+        while get_xp_for_level(current_level + 1) <= season_xp:
             current_level += 1
+        current_level = min(current_level, 30)
 
         xp_current = get_xp_for_level(current_level)
         xp_next    = get_xp_for_level(current_level + 1)
@@ -4599,7 +4682,7 @@ async def season(ctx: commands.Context, action: str = "info"):
         bar = create_progress_bar(progress, needed, length=14)
         emoji = get_level_emoji(current_level)
 
-        embed.title = f"{emoji} Сезон «{current_season['name']}» — Уровень {current_level}"
+        embed.title = f"{emoji} Сезон «{current_season['name']}» — Уровень {current_level}{' (MAX)' if current_level == 30 else ''}"
         embed.description = (
             f"**{ctx.author.mention}**, ты в эпичном сезоне **{current_season['name']}**!\n"
             f"Сезон завершится **{current_season['end_date']}**."
