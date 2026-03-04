@@ -4659,36 +4659,34 @@ async def season(ctx: commands.Context):
 
     # Для обычных пользователей — прогресс разработки
     if not is_tester(ctx.author):
-        dev_progress = 75
+        dev_progress = 61  # можешь менять
         bar = create_progress_bar(dev_progress, 100, length=20)
 
-        embed.title = "🪦 Premium Track — В разработке!"
+        embed.title = "🪦 Premium Track • В разработке"
         embed.description = (
-            f"**{ctx.author.mention}**, элита уже восстала...\n"
-            "Скоро Premium Track станет доступен **всем** участникам!\n\n"
-            "Следи за обновлениями — будет мощно 🔥"
+            f"**{ctx.author.mention}**, элита уже восстала из мёртвых... 🔥\n"
+            "Скоро Premium Track откроется **всем** участникам сервера!\n"
+            "Будет мощно — следи за анонсами."
         )
 
         embed.add_field(
-            name="Прогресс разработки",
-            value=f"`{bar}` **{dev_progress}%** готово\n(роль, бусты, награды, магазин...)",
+            name="Прогресс воскрешения",
+            value=f"**{bar}**  **{dev_progress}%** готово\n"
+                  f"• Временные роли\n"
+                  f"• Бусты опыта\n"
+                  f"• Эксклюзивные награды\n"
+                  f"• Роль Season Pass Holder",
             inline=False
         )
 
         embed.add_field(
-            name="Что будет в Premium",
-            value=(
-                "• ×1.5 к сезонному опыту\n"
-                "• +200 MortisCoin каждую неделю\n"
-                "• +500 осколков сразу\n"
-                "• Эксклюзивные награды на уровнях\n"
-                "• Роль **Season Pass Holder** на 30 уровне"
-            ),
+            name="Как получить доступ раньше?",
+            value="Получи роль **Тестировщик** — напиши администратору",
             inline=False
         )
 
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text="MortisPlay • Скоро для всех • Следи за анонсами!")
+        embed.set_footer(text="MortisPlay • Скоро для всех • v0.5")
         
         await ctx.send(embed=embed, ephemeral=True)
         return
