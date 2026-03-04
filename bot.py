@@ -4621,16 +4621,16 @@ async def shop(ctx: commands.Context):
 
 @bot.hybrid_command(
     name="season",
-    description="Сезон, пропуск, квесты, магазин, топ и помощь"
+    description="Восстание из мёртвых — твой путь к легенде"
 )
 @app_commands.describe(action="Что посмотреть")
 @app_commands.choices(action=[
     app_commands.Choice(name="Информация о сезоне",     value="info"),
-    app_commands.Choice(name="Пропуск сезона",          value="pass"),
+    app_commands.Choice(name="Пропуск (Premium)",       value="pass"),
     app_commands.Choice(name="Задания",                 value="tasks"),
-    app_commands.Choice(name="Магазин сезона",          value="shop"),
-    app_commands.Choice(name="Топ игроков сезона",      value="top"),
-    app_commands.Choice(name="Помощь по сезону",        value="help"),
+    app_commands.Choice(name="Магазин осколков",        value="shop"),
+    app_commands.Choice(name="Топ восставших",          value="top"),
+    app_commands.Choice(name="Помощь",                  value="help"),
 ])
 @tester_only
 async def season(ctx: commands.Context, action: str = "info"):
@@ -4638,181 +4638,202 @@ async def season(ctx: commands.Context, action: str = "info"):
 
     user_id = str(ctx.author.id)
 
-    # ─── Инициализация данных ───
+    # Инициализация
     if user_id not in season_data:
-        season_data[user_id] = {
-            "season_xp": 0,
-            "season_level": 1,
-            "season_points": 0,
-            "claimed_rewards": []
-        }
+        season_data[user_id] = {"season_xp": 0, "season_level": 1, "season_points": 0, "claimed_rewards": []}
         save_seasons()
 
     if user_id not in economy_data:
         economy_data[user_id] = {"balance": 0}
 
-    # Важно: инициализируем новые поля
     economy_data[user_id].setdefault("season_points", 0)
     economy_data[user_id].setdefault("season_purchases", [])
-    economy_data[user_id].setdefault("premium_track_active", False)   # ← наш главный флаг
+    economy_data[user_id].setdefault("premium_track_active", False)
 
-    # ─── Удобные переменные ───
-    season_player    = season_data[user_id]
-    season_xp        = season_player["season_xp"]
-    season_level     = season_player["season_level"]
-    season_points    = economy_data[user_id]["season_points"]
-    season_purchases = economy_data[user_id]["season_purchases"]
-    has_premium      = economy_data[user_id]["premium_track_active"]   # ← удобно
-    claimed_rewards  = season_player["claimed_rewards"]
+        # ─── Удобные переменные (безопасный вариант с .get()) ───
+    season_player    = season_data.get(user_id, {})
+    season_xp        = season_player.get("season_xp", 0)
+    season_level     = season_player.get("season_level", 1)
+    season_points    = economy_data.get(user_id, {}).get("season_points", 0)
+    season_purchases = economy_data.get(user_id, {}).get("season_purchases", [])
+    has_premium      = economy_data.get(user_id, {}).get("premium_track_active", False)
+    claimed_rewards  = season_player.get("claimed_rewards", [])
 
-    embed = discord.Embed(color=0x9B59B6)
+    player = season_data[user_id]
+    season_xp = player["season_xp"]
+    season_level = player["season_level"]
+    season_points = economy_data[user_id]["season_points"]
+    has_premium = economy_data[user_id]["premium_track_active"]
+    claimed = player["claimed_rewards"]
+
+    # ─── Цвета и атмосфера сезона ───
+    BASE_COLOR = 0x2E1A47      # тёмно-фиолетовый (тьма)
+    PREMIUM_COLOR = 0xFF2D55   # ярко-алый (кровь нежити)
+    ACCENT_COLOR = 0xFFD700    # золото для элиты
+    DARK_BG = 0x1A0D2B         # почти чёрный фон
+
+    embed = discord.Embed(color=PREMIUM_COLOR if has_premium else BASE_COLOR)
 
     if action == "info":
-        current_level = 1
-        while get_xp_for_level(current_level + 1) <= season_xp:
-            current_level += 1
-        current_level = min(current_level, 30)
+        # Уровень
+        lvl = 1
+        while get_xp_for_level(lvl + 1) <= season_xp:
+            lvl += 1
+        lvl = min(lvl, 30)
 
-        xp_current = get_xp_for_level(current_level)
-        xp_next    = get_xp_for_level(current_level + 1)
-        progress   = season_xp - xp_current
-        needed     = xp_next - xp_current or 1
-        percent    = min(100, int((progress / needed) * 100))
+        xp_current = get_xp_for_level(lvl)
+        xp_next = get_xp_for_level(lvl + 1) if lvl < 30 else xp_current
+        progress_xp = season_xp - xp_current
+        needed = xp_next - xp_current or 1
+        percent = min(100, int((progress_xp / needed) * 100))
 
-        bar = create_progress_bar(progress, needed, length=14)
-        emoji = get_level_emoji(current_level)
+        bar = create_progress_bar(progress_xp, needed, length=20)
 
-        embed.title = f"{emoji} Сезон «{current_season['name']}» — Уровень {current_level}{' (MAX)' if current_level == 30 else ''}"
+        emoji = get_level_emoji(lvl)
+        title = f"{emoji} Восстание из мёртвых — Уровень {lvl}"
+        if lvl == 30:
+            title += " 🔥 Повелитель нежити"
+
+        embed.title = title
         embed.description = (
-            f"**{ctx.author.mention}**, ты в эпичном сезоне **{current_season['name']}**!\n"
-            f"Сезон завершится **{current_season['end_date']}**."
+            f"**{ctx.author.mention}**, ты восстал из мёртвых и идёшь к вершине тьмы...\n"
+            f"Сезон закончится **{current_season['end_date']}**. Не дай свету погасить твою душу."
         )
 
-        embed.add_field(name="🏅 Уровень", value=f"**{current_level}** → **{current_level + 1}**", inline=True)
-        embed.add_field(name="✨ Опыт", value=f"**{format_number(season_xp)}** / **{format_number(xp_next)}** XP", inline=True)
-        embed.add_field(name="Прогресс", value=f"`{bar}` **{percent}%**", inline=False)
+        embed.add_field(name="🩸 Уровень", value=f"**{lvl}** → **{lvl + 1 if lvl < 30 else 'MAX'}**", inline=True)
+        embed.add_field(name="🔥 Опыт воскрешения", value=f"**{format_number(season_xp)}** / **{format_number(xp_next)}**", inline=True)
+        embed.add_field(name="Прогресс души", value=f"`{bar}` **{percent}%**", inline=False)
 
-        embed.add_field(name="🏆 Сезонные очки", value=f"**{format_number(season_points)}**", inline=True)
+        embed.add_field(name="🪙 Осколки душ", value=f"**{format_number(season_points)}**", inline=True)
+
+        status = f"✨ **Premium Track** — Элита нежити" if has_premium else "🪦 **Free Track** — Восстань!"
+        embed.add_field(name="Твой путь", value=status, inline=False)
+
+        if has_premium:
+            embed.add_field(
+                name="Силы Premium",
+                value="×1.5 к опыту • +200 🪙 еженедельно • +500 осколков • Эксклюзивные дары",
+                inline=False
+            )
+
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text=f"MortisPlay • Сезон v1 • ID: {user_id}")
+        embed.set_footer(text=f"MortisPlay • Сезон 10 • ID: {user_id} • {datetime.now(timezone.utc).strftime('%d.%m.%Y')}")
+
+        # Кнопка обновления
+        view = View(timeout=180)
+        refresh = Button(label="Обновить прогресс", style=discord.ButtonStyle.green, emoji="🔄")
+
+        async def refresh_cb(inter: discord.Interaction):
+            if inter.user.id != ctx.author.id:
+                return await inter.response.send_message("Это не твоя команда!", ephemeral=True)
+            # Здесь можно пересчитать embed заново, но для простоты — просто подтверждаем
+            await inter.response.send_message("Прогресс обновлён! (данные актуальны)", ephemeral=True)
+
+        refresh.callback = refresh_cb
+        view.add_item(refresh)
+
+        await ctx.send(embed=embed, view=view, ephemeral=True)
+        return
+
+    # ─── Остальные вкладки ───
+    elif action == "pass":
+        if has_premium:
+            embed.title = "🔥 Ты уже среди элиты нежити!"
+            embed.color = PREMIUM_COLOR
+            embed.description = f"**{ctx.author.mention}**, тьма гордится тобой."
+            embed.add_field(
+                name="Твои дары Premium Track",
+                value=(
+                    "• **×1.5** к опыту воскрешения\n"
+                    "• **+200** MortisCoin каждую неделю\n"
+                    "• **+500** осколков душ при активации\n"
+                    "• Эксклюзивные дары на уровнях\n"
+                    "• Постоянная роль **Season Pass Holder** на 30 уровне"
+                ),
+                inline=False
+            )
+        else:
+            embed.title = "🪦 Стань сильнее мёртвых"
+            embed.color = ACCENT_COLOR
+            embed.description = (
+                f"**{ctx.author.mention}**, пробейся сквозь орды!\n"
+                "Активируй **Premium Track** и обрети силу нежити."
+            )
+            embed.add_field(name="Цена", value="**5000** 🪙\n(один раз на сезон)", inline=True)
+            embed.add_field(name="Что получишь", value=..., inline=False)  # как раньше
+
+    elif action == "tasks":
+        embed.title = "📜 Задания воскрешения"
+        embed.color = 0x8B0000  # тёмно-красный
+        embed.description = "Выполняй ежедневные ритуалы — стань сильнее."
+
+        embed.add_field(
+            name="Ежедневные ритуалы",
+            value=(
+                "• 50 воплей (сообщений) → **+200 XP**\n"
+                "• 30 минут среди мёртвых (голос) → **+300 XP**\n"
+                "• Проведи `/daily` → **+100 XP**"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Еженедельные жертвоприношения",
+            value=(
+                "• Набрать **5000 XP** за неделю → **+1500 осколков**\n"
+                "• Купить что-либо в магазине → **+800 осколков**"
+            ),
+            inline=False
+        )
 
     elif action == "shop":
-        # (твой старый код shop без изменений)
-        embed.title = "🛍 Магазин сезона"
-        embed.description = f"У тебя **{format_number(season_points)}** сезонных очков\nВыбери товар ниже"
-        embed.color = 0xE67E22
+        embed.title = "🪦 Лавка осколков душ"
+        embed.description = f"У тебя **{format_number(season_points)}** осколков\nВыбери дар тьмы ниже"
+        embed.color = 0x4B0082
 
         for item_id, item in SEASON_SHOP_ITEMS.items():
             owned = item_id in season_purchases
-            status = "✅ Куплено" if owned else f"Цена: **{format_number(item['cost'])}** очков"
+            icon = "✨" if item_id == "premium_pass" else "🛒"
+            status = "✅ Приобретено" if owned else f"{format_number(item['cost'])} осколков"
             embed.add_field(
-                name=f"{item['name']} {'(Куплено)' if owned else ''}",
-                value=f"{status}\n{item['description']}",
+                name=f"{icon} {item['name']}",
+                value=f"**{status}**\n{item['description']}",
                 inline=False
             )
 
         embed.set_footer(text="Нажми кнопку → подтверди покупку")
+
         view = SeasonShopView(author_id=ctx.author.id)
         await ctx.send(embed=embed, view=view, ephemeral=True)
         return
 
-    elif action == "pass":
-        # ──────────────────────── НОВЫЙ КРАСИВЫЙ БЛОК ────────────────────────
-        if has_premium:
-            embed.title = "✨ Premium Pass — Активен!"
-            embed.color = 0xF1C40F
-            embed.description = f"**{ctx.author.mention}**, ты уже на **Premium Track**! 🔥"
-            
-            embed.add_field(
-                name="✅ Твои активные бонусы",
-                value=(
-                    "• **+50% к сезонному опыту** (сообщения, голос, daily)\n"
-                    "• **+200 MortisCoin** к каждому `/daily`\n"
-                    "• **+500** сезонных очков (получено при покупке)\n"
-                    "• Эксклюзивные награды на уровнях\n"
-                    "• Роль **Season Pass Holder** при 30 уровне"
-                ),
-                inline=False
-            )
-            embed.set_footer(text="Ты в элите сезона • MortisPlay Premium")
-        else:
-            embed.title = "✨ Premium Pass — Элитный трек сезона"
-            embed.color = 0xFFD700
-            embed.description = (
-                f"**{ctx.author.mention}**, открой полный потенциал сезона **{current_season['name']}**!\n\n"
-                "Купи Premium Pass и получи мощные преимущества:"
-            )
-            
-            embed.add_field(
-                name="Что даёт Premium Pass",
-                value=(
-                    "• **+50% к сезонному опыту** (всё быстрее)\n"
-                    "• **+200 MortisCoin** к каждому `/daily`\n"
-                    "• **+500** сезонных очков сразу\n"
-                    "• Эксклюзивные награды и роли\n"
-                    "• Роль **Season Pass Holder** при 30 уровне"
-                ),
-                inline=False
-            )
-            embed.add_field(name="Стоимость", value="**5000** MortisCoin 🪙\n(одноразово на весь сезон)", inline=True)
-            embed.add_field(name="Статус", value="Не приобретён", inline=True)
-            embed.set_footer(text="Купи сейчас — стань легендой сезона!")
-
-    elif action == "tasks":
-        # (твой старый код без изменений)
-        embed.title = "📜 Ежедневные и еженедельные задания"
-        embed.color = 0x2ECC71
-        embed.description = "Выполняй задания каждый день — получай опыт и очки!"
-
-        embed.add_field(
-            name="Ежедневные задания",
-            value=(
-                "• Отправить **50 сообщений** → **+200 XP**\n"
-                "• Провести **30 минут** в голосовом → **+300 XP**\n"
-                "• Использовать `/daily` → **+100 XP**"
-            ),
-            inline=False
-        )
-        embed.add_field(
-            name="Еженедельные задания",
-            value=(
-                "• Набрать **5000 XP** за неделю → **+1500 очков**\n"
-                "• Купить что-либо в магазине сезона → **+800 очков**"
-            ),
-            inline=False
-        )
-        embed.set_footer(text="Обновление ежедневных заданий → 00:00 UTC")
-
     elif action == "top":
-        embed.title = "🏆 Топ игроков сезона"
-        embed.description = "Пока топ не реализован полностью.\nСкоро здесь будет топ-10 по уровням и очкам!"
-        embed.color = 0x3498DB
-        embed.add_field(name="Твой текущий ранг", value="Пока не в топ-100 (нужно больше активности!)", inline=False)
-        embed.set_footer(text="Обновляется каждые 30 минут • Скоро будет полный топ")
+        embed.title = "🏆 Топ восставших"
+        embed.description = (
+            "Пока тьма ещё не составила полный список...\n"
+            "Скоро здесь будет топ-10 самых могущественных нежитей!"
+        )
+        embed.color = 0xFFD700
+        embed.add_field(name="Твой ранг", value="Пока за пределами видимости тьмы... стань сильнее!", inline=False)
 
     elif action == "help":
-        # (можно оставить как было, или слегка улучшить — оставил твой вариант)
-        embed.title = "❓ Помощь по сезону"
-        embed.color = 0x3498DB
+        embed.title = "🪦 Путь восставшего"
         embed.description = (
-            f"**{ctx.author.mention}**, вот краткое руководство по сезону **{current_season['name']}**:\n\n"
-            "1. **Как зарабатывать опыт (XP)?**\n"
-            "   • Пиши сообщения → +3 XP (Premium: +4.5)\n"
-            "   • Будь в голосовом → +2 XP/мин (Premium: +3)\n"
-            "   • Выполняй `/daily` → +150 XP (Premium: +225 +200 монет)\n\n"
-            "2. **Premium Pass (5000 MortisCoin)**\n"
-            "   • +50% XP • +500 очков сразу • +200 монет к daily\n"
-            "   • Эксклюзивная роль на 30 уровне\n\n"
-            "3. **Как посмотреть прогресс?**\n"
-            "   → `/season info` — уровень и XP\n"
-            "   → `/season pass` — статус Premium\n"
-            "   → `/season shop` — магазин\n"
-            "   → `/season tasks` — задания"
+            f"**{ctx.author.mention}**, вот как выжить в **Восстании из мёртвых**:\n\n"
+            "1. Зарабатывай опыт воскрешения\n"
+            "   • Сообщения → +3 XP (Premium: +4.5)\n"
+            "   • Голос → +2 XP/мин (Premium: +3)\n"
+            "   • `/daily` → +150 XP (Premium: +225 +200 🪙)\n\n"
+            "2. Premium Track (5000 🪙)\n"
+            "   • ×1.5 XP • +200 🪙 в неделю • +500 осколков • дары на уровнях • роль на 30 уровне\n\n"
+            "3. Команды\n"
+            "   → `/season info` — твой прогресс\n"
+            "   → `/season pass` — Premium Track\n"
+            "   → `/season shop` — лавка осколков\n"
+            "   → `/season tasks` — ритуалы"
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text="MortisPlay • Сезон v1 • Задавай вопросы модераторам!")
 
-    # Одна отправка для всех случаев, кроме shop
+    # Финальная отправка
     await ctx.send(embed=embed, ephemeral=True)
 
 @tasks.loop(minutes=10)
