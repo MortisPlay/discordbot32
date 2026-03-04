@@ -1576,14 +1576,13 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
         if lvl in current_season["rewards"]:
             reward = current_season["rewards"][lvl]
 
-            # Помечаем награду как полученную (в claimed храним строки)
+            # Помечаем награду как полученную
             if lvl_str not in claimed:
                 claimed.append(lvl_str)
 
             # Выдаём награду в зависимости от типа
             if reward["type"] == "role" and "role_id" in reward and reward["role_id"]:
                 try:
-                    # member может быть передан из события, но если нет — ищем по ID
                     if not member:
                         guild = bot.get_guild(FULL_ACCESS_GUILD_ID)
                         if guild:
@@ -1594,7 +1593,6 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                         if role:
                             await member.add_roles(role, reason=f"Сезонная награда — уровень {lvl}")
 
-                            # Уведомление в ЛС
                             try:
                                 embed_role = discord.Embed(
                                     title="🎉 Новая роль получена!",
@@ -1609,23 +1607,20 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                                 embed_role.set_footer(text="MortisPlay • Сезон")
                                 await member.send(embed=embed_role)
                             except discord.Forbidden:
-                                pass  # ЛС закрыты
+                                pass
                             except Exception as e:
                                 print(f"[LEVEL-REWARD DM] Ошибка отправки ЛС роли {lvl}: {e}")
-
                 except Exception as e:
                     print(f"Ошибка выдачи роли уровня {lvl} для {user_id}: {e}")
 
             elif reward["type"] == "boost":
-                # Заглушка — можно добавить логику буста позже
-                pass
+                pass  # заглушка
 
             elif reward["type"] == "cosmetic":
                 try:
                     user = bot.get_user(int(user_id))
                     if not user:
                         user = await bot.fetch_user(int(user_id))
-
                     embed_cos = discord.Embed(
                         title="✨ Косметическая награда!",
                         description=(
@@ -1640,10 +1635,87 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                 except Exception as e:
                     print(f"[COSMETIC DM] Ошибка для {user_id} уровня {lvl}: {e}")
 
+    # ─── Специальная награда за 30 уровень ───
+    if new_level >= 30 and "30" not in claimed:
+        claimed.append("30")
+
+        # Находим участника, если не передан
+        if not member:
+            guild = bot.get_guild(FULL_ACCESS_GUILD_ID)
+            if guild:
+                member = guild.get_member(int(user_id))
+
+        if economy_data[user_id].get("premium_track_active", False):
+            # Premium Track — 5000 монет + роль Season Pass Holder
+            economy_data[user_id]["balance"] += 5000
+            save_economy()
+
+            role_name = "Season Pass Holder"
+            role = discord.utils.get(member.guild.roles, name=role_name) if member else None
+
+            if role and member:
+                await member.add_roles(role, reason="Достиг 30 уровня на Premium Track")
+
+            embed_premium = discord.Embed(
+                title="🏆 Легенда сезона! Premium Track",
+                description=(
+                    f"**{member.mention if member else 'Ты'}** достиг **30 уровня** на **Premium Track**!\n\n"
+                    f"Получено:\n"
+                    f"• **5000 MortisCoin**\n"
+                    f"• Роль **{role_name}**"
+                ),
+                color=0xFFD700,
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed_premium.set_thumbnail(url=member.display_avatar.url if member else None)
+            embed_premium.set_footer(text="MortisPlay • Сезон • Элита")
+
+            try:
+                if member:
+                    await member.send(embed=embed_premium)
+                else:
+                    user = bot.get_user(int(user_id))
+                    if user:
+                        await user.send(embed=embed_premium)
+            except:
+                pass  # ЛС закрыты
+
+            # Публичное объявление
+            if member and member.guild:
+                try:
+                    announce_ch = member.guild.system_channel or bot.get_channel(WELCOME_CHANNEL_ID)
+                    if announce_ch:
+                        await announce_ch.send(
+                            f"🏆 {member.mention} достиг **30 уровня** на **Premium Track** и получил роль **Season Pass Holder**! 🔥"
+                        )
+                except:
+                    pass
+
+        else:
+            # Free Track — только 1000 монет
+            economy_data[user_id]["balance"] += 1000
+            save_economy()
+
+            embed_free = discord.Embed(
+                title="🎉 30 уровень достигнут!",
+                description="+1000 MortisCoin за Free Track!\nПродолжай в том же духе!",
+                color=0x3498DB,
+                timestamp=datetime.now(timezone.utc)
+            )
+            embed_free.set_thumbnail(url=member.display_avatar.url if member else None)
+
+            try:
+                user = bot.get_user(int(user_id))
+                if user:
+                    await user.send(embed=embed_free)
+            except:
+                pass
+
     # ─── Сохраняем изменения ───
     save_seasons()
+    save_economy()
 
-    # ─── ЛС уведомление о новом уровне ───
+    # ─── ЛС уведомление о новом уровне (общее) ───
     try:
         user = bot.get_user(int(user_id))
         if not user:
@@ -1683,7 +1755,7 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
             channel = (
                 member.guild.system_channel or
                 bot.get_channel(WELCOME_CHANNEL_ID) or
-                member.guild.text_channels[0]  # запасной вариант
+                member.guild.text_channels[0]
             )
             if channel:
                 await channel.send(
@@ -1860,7 +1932,8 @@ async def voice_income_task():
                    
                     # Сохраняем сразу после начисления
                     save_economy()
-@tasks.loop(minutes=5) # каждые 5 минут проверяем и начисляем XP
+
+@tasks.loop(minutes=5)  # каждые 5 минут проверяем и начисляем XP
 async def voice_season_xp_task():
     now = datetime.now(timezone.utc).timestamp()
    
@@ -1868,45 +1941,61 @@ async def voice_season_xp_task():
         for vc in guild.voice_channels:
             if "afk" in vc.name.lower():
                 continue
+            
             active_members = [
                 m for m in vc.members
                 if not m.bot
                 and not (m.voice.mute or m.voice.self_mute or m.voice.self_deaf or m.voice.deaf)
             ]
+            
             if len(active_members) < 2:
                 continue
+            
             for member in active_members:
                 user_id = str(member.id)
                
                 # Пропускаем, если не заходил в голос (нет таймера)
                 if user_id not in voice_start_time:
                     continue
+                
                 # Сколько минут прошло с последнего входа
                 minutes_in_voice = (now - voice_start_time[user_id]) / 60
-               
+                
                 # Начисляем только за полные минуты
                 if minutes_in_voice < 1:
                     continue
+                
                 # Базовое значение XP за минуту
                 xp_per_min = current_season["xp_per_voice_minute"]
+                
+                # VIP ×2
                 if is_vip(member):
-                    xp_per_min *= 2 # VIP получает ×2
+                    xp_per_min *= 2
+                
                 # За 5 минут начисляем примерно это количество
                 xp_to_add = int(xp_per_min * 5)
+                
+                # ← Добавляем +50% для Premium Pass
+                if economy_data.get(user_id, {}).get("premium_track_active", False):
+                    xp_to_add = int(xp_to_add * 1.5)
+                
                 # Проверка дневного лимита сезонного XP
                 today_str = datetime.now(timezone.utc).date().isoformat()
                 if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
                     daily_season_xp_earned[user_id] = 0
                     daily_season_xp_reset[user_id] = today_str
+                
                 remaining_xp = current_season["max_daily_xp"] - daily_season_xp_earned.get(user_id, 0)
                 if xp_to_add > remaining_xp:
                     xp_to_add = max(0, remaining_xp)
+                
                 if xp_to_add > 0:
                     # Начисляем
                     season_data[user_id]["season_xp"] += xp_to_add
                     await check_and_level_up(user_id, member)
                     daily_season_xp_earned[user_id] += xp_to_add
-                                        # Прогресс голосового задания
+                    
+                    # Прогресс голосового задания
                     prog = daily_tasks_progress.setdefault(user_id, {
                         "messages": 0, "voice": 0, "daily": 0, "date": today_str
                     })
@@ -1925,24 +2014,27 @@ async def voice_season_xp_task():
                             )
                         except:
                             pass
-                   
+                    
                     # Сохраняем
                     save_seasons()
                     save_daily_tasks()
+                    
                     # Опционально: уведомление каждые 500 XP за сессию
                     if xp_to_add >= 500:
                         try:
                             await member.send(
                                 embed=discord.Embed(
                                     title="🌟 Сезонный прогресс!",
-                                    description=f"Ты получил **+{xp_to_add}** сезонного XP за голосовой онлайн!\n"
-                                                f"Сегодня уже: **{daily_season_xp_earned[user_id]:,} / {current_season['max_daily_xp']:,}** XP",
+                                    description=(
+                                        f"Ты получил **+{xp_to_add}** сезонного XP за голосовой онлайн!\n"
+                                        f"Сегодня уже: **{daily_season_xp_earned[user_id]:,} / {current_season['max_daily_xp']:,}** XP"
+                                    ),
                                     color=0x9B59B6,
                                     timestamp=datetime.now(timezone.utc)
                                 ).set_footer(text="MortisPlay • Сезон")
                             )
                         except:
-                            pass # ЛС закрыты — ничего страшного
+                            pass  # ЛС закрыты — ничего страшного
 # ───────────────────────────────────────────────
 # СОБЫТИЯ
 # ───────────────────────────────────────────────
@@ -2184,7 +2276,7 @@ async def on_message(message):
         await check_auto_punishment(message.author, reason)
         return
 
-    # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
+        # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
     if has_full_access(message.guild.id) or message.author.id == OWNER_ID:
         # Инициализация
         if user_id not in economy_data:
@@ -2204,8 +2296,14 @@ async def on_message(message):
 
             # Сезонный XP
             xp_per_msg = current_season["xp_per_message"]
+
+            # VIP ×2
             if is_vip(message.author):
                 xp_per_msg = int(xp_per_msg * 2)
+
+            # Premium Pass +50%
+            if economy_data[user_id].get("premium_track_active", False):
+                xp_per_msg = int(xp_per_msg * 1.5)
 
             today_str = datetime.now(timezone.utc).date().isoformat()
             if daily_season_xp_reset.get(user_id) != today_str:
@@ -2217,24 +2315,25 @@ async def on_message(message):
                 season_data[user_id]["season_xp"] += xp_per_msg
                 await check_and_level_up(user_id, message.author)
                 daily_season_xp_earned[user_id] += xp_per_msg
-                            # Прогресс ежедневного задания "messages"
-            prog = daily_tasks_progress.setdefault(user_id, {
-                "messages": 0, "voice": 0, "daily": 0, "date": today_str
-            })
-            if prog["date"] != today_str:
-                prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
-                daily_tasks_progress[user_id] = prog
 
-            prog["messages"] += 1
-            if prog["messages"] == DAILY_TASKS["messages"]["goal"]:
-                extra_xp = DAILY_TASKS["messages"]["xp"]
-                season_data[user_id]["season_xp"] += extra_xp
-                await check_and_level_up(user_id, message.author)
-                await message.channel.send(
-                    f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
-                    delete_after=10
-                )
-                print(f"[XP SUCCESS] +{xp_per_msg} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
+                # Прогресс ежедневного задания "messages"
+                prog = daily_tasks_progress.setdefault(user_id, {
+                    "messages": 0, "voice": 0, "daily": 0, "date": today_str
+                })
+                if prog["date"] != today_str:
+                    prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
+                    daily_tasks_progress[user_id] = prog
+
+                prog["messages"] += 1
+                if prog["messages"] >= DAILY_TASKS["messages"]["goal"]:
+                    extra_xp = DAILY_TASKS["messages"]["xp"]
+                    season_data[user_id]["season_xp"] += extra_xp
+                    await check_and_level_up(user_id, message.author)
+                    await message.channel.send(
+                        f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
+                        delete_after=10
+                    )
+                    print(f"[XP SUCCESS] +{xp_per_msg} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
 
             save_economy()
             save_seasons()
@@ -4232,6 +4331,12 @@ async def daily(ctx: commands.Context):
                 bonus = int(reward * 0.1)
                 reward += bonus
 
+        # Premium бонус +200 MortisCoin к daily
+        premium_bonus = 0
+        if economy_data[user_id].get("premium_track_active", False):
+            premium_bonus = 200
+            reward += premium_bonus
+
         # Начисляем монеты
         economy_data[user_id]["balance"] += reward
         economy_data[user_id]["last_daily"] = now
@@ -4264,6 +4369,14 @@ async def daily(ctx: commands.Context):
                 inline=True
             )
 
+        # Premium бонус
+        if premium_bonus > 0:
+            embed.add_field(
+                name="✨ Premium Daily Bonus",
+                value=f"+{premium_bonus} MortisCoin",
+                inline=True
+            )
+
         # Налог
         if tax > 0:
             embed.add_field(
@@ -4276,6 +4389,10 @@ async def daily(ctx: commands.Context):
         daily_xp = current_season["daily_xp_bonus"]
         if is_vip(ctx.author):
             daily_xp = int(daily_xp * 2)
+
+        # +50% к XP для Premium Pass
+        if economy_data[user_id].get("premium_track_active", False):
+            daily_xp = int(daily_xp * 1.5)
 
         if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
             daily_season_xp_earned[user_id] = 0
