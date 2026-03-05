@@ -1408,14 +1408,17 @@ class SeasonShopView(View):
         self.author_id = author_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Это не твоё меню!", ephemeral=True)
+            return False
+        return True
 
-    @discord.ui.button(label="Обновить баланс", style=discord.ButtonStyle.grey, emoji="🔄", row=1)
+    @discord.ui.button(label="Обновить осколки", style=discord.ButtonStyle.grey, emoji="🔄", row=2)
     async def refresh_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
         points = economy_data.get(user_id, {}).get("season_points", 0)
         await interaction.response.send_message(
-            f"🌟 Текущий баланс сезонных очков: **{format_number(points)}**",
+            f"🪙 Текущие осколки: **{format_number(points)}**",
             ephemeral=True
         )
 
@@ -1427,17 +1430,25 @@ class SeasonShopView(View):
     async def buy_vip_3d(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "vip_3d")
 
-    @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, row=0)
+    @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, row=1)
     async def buy_premium_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "premium_pass")
 
-    @discord.ui.button(label="5000 MortisCoin", style=discord.ButtonStyle.green, row=0)
+    @discord.ui.button(label="5000 MortisCoin", style=discord.ButtonStyle.green, row=1)
     async def buy_coins_5000(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "coins_5000")
 
     async def _buy_item(self, interaction: discord.Interaction, item_key: str):
         item = SEASON_SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
+
+        if user_id not in economy_data:
+            economy_data[user_id] = {}
+        if "season_points" not in economy_data[user_id]:
+            economy_data[user_id]["season_points"] = 0
+        if "season_purchases" not in economy_data[user_id]:
+            economy_data[user_id]["season_purchases"] = []
+
         points = economy_data[user_id]["season_points"]
 
         if item_key in economy_data[user_id]["season_purchases"]:
@@ -1448,7 +1459,7 @@ class SeasonShopView(View):
 
         if points < item["cost"]:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно очков! Нужно {format_number(item['cost'])}, у тебя {format_number(points)}",
+                f"{ECONOMY_EMOJIS['error']} Недостаточно осколков!\nНужно: **{format_number(item['cost'])}**, у тебя: **{format_number(points)}**",
                 ephemeral=True
             )
 
@@ -1477,49 +1488,57 @@ class SeasonConfirmModal(Modal, title="Подтверждение покупки
         item = SEASON_SHOP_ITEMS[self.item_key]
 
         # Финальная проверка
-        if economy_data[user_id]["season_points"] < self.price:
+        if user_id not in economy_data or economy_data[user_id].get("season_points", 0) < self.price:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно очков (изменилось)!",
+                f"{ECONOMY_EMOJIS['error']} Недостаточно осколков (изменилось за время ожидания)!",
                 ephemeral=True
             )
 
         # Списание
         economy_data[user_id]["season_points"] -= self.price
-        economy_data[user_id]["season_purchases"].append(self.item_key)
-        save_economy()
+        economy_data[user_id].setdefault("season_purchases", []).append(self.item_key)
 
-        # Выдача
         msg = ""
         if item["type"] == "coins":
-            economy_data[user_id]["balance"] += item["amount"]
+            economy_data[user_id]["balance"] = economy_data[user_id].get("balance", 0) + item["amount"]
+            msg = f"✅ Зачислено **+{format_number(item['amount'])}** MortisCoin!"
             save_economy()
-            msg = f"✅ +{format_number(item['amount'])} MortisCoin зачислено!"
 
         elif item["type"] == "role":
             role = discord.utils.get(interaction.guild.roles, name=item["role_name"])
             if role:
                 await interaction.user.add_roles(role)
                 temp_roles.setdefault(user_id, {})[str(role.id)] = (
-                    datetime.now(timezone.utc).timestamp() + item["duration_days"] * 86400
+                    datetime.now(timezone.utc).timestamp() + (item["duration_days"] * 86400)
                 )
                 msg = f"✅ Роль **{role.name}** выдана на {item['duration_days']} дня!"
             else:
-                msg = f"{ECONOMY_EMOJIS['error']} Роль не найдена!"
+                msg = f"{ECONOMY_EMOJIS['error']} Роль **{item['role_name']}** не найдена на сервере!"
 
         elif item["type"] == "boost":
-            # Пока заглушка — можно добавить поле xp_boost_end
-            msg = f"✅ **{item['name']}** активирован!"
+            # Пока заглушка — позже добавим xp_boost_end
+            msg = f"✅ **{item['name']}** активирован на 24 часа! (эффект пока не работает)"
 
         elif item["type"] == "pass":
-            # Пока заглушка
-            msg = "✅ Premium Pass активирован! (в разработке)"
+            economy_data[user_id]["premium_track_active"] = True
+            economy_data[user_id]["season_points"] += 500
+            save_economy()
+            msg = (
+                "✨ **Premium Pass активирован!**\n"
+                f"+500 сезонных очков мгновенно!\n"
+                "Теперь ты получаешь:\n"
+                "• ×1.5 к сезонному опыту\n"
+                "• +200 MortisCoin каждую неделю\n"
+                "• Эксклюзивные награды на уровнях\n"
+                "• Роль Season Pass Holder на 30 уровне"
+            )
 
         await interaction.response.send_message(msg, ephemeral=True)
 
-        # Лог
+        # Лог в мод-канал
         await send_mod_log(
             title="🛒 Покупка в магазине сезона",
-            description=f"**{interaction.user.mention}** купил **{self.item_name}** за {format_number(self.price)} сезонных очков",
+            description=f"**{interaction.user.mention}** купил **{self.item_name}** за {format_number(self.price)} осколков",
             color=COLORS["economy"]
         )        
 # ───────────────────────────────────────────────
@@ -1716,35 +1735,47 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
                 pass
 
     # ─── Эксклюзивные награды Premium на промежуточных уровнях ───
-    # Этот блок ВНЕ зависимости от 30 уровня — награды выдаются при достижении любого из 5/10/15/20/25
+    # Выдаётся при достижении любого из уровней 5/10/15/20/25 (независимо от 30 уровня)
     if economy_data[user_id].get("premium_track_active", False):
         premium_rewards = {
-            5:  {"coins": 300,  "msg": "+300 MortisCoin за ранний старт!"},
-            10: {"coins": 600,  "msg": "+600 MortisCoin • хороший темп!"},
-            15: {"coins": 1000, "msg": "+1000 MortisCoin • полпути к легенде!"},
-            20: {"coins": 1800, "msg": "+1800 MortisCoin • уже элита!"},
-            25: {"coins": 2500, "msg": "+2500 MortisCoin • почти максимум!"},
+            5:  {"coins": 500,   "msg": "+500 MortisCoin — за достижение 5 уровня Premium Track!"},
+            10: {"coins": 600,   "msg": "+600 MortisCoin — хороший темп, продолжай!"},
+            15: {"coins": 1000,  "msg": "+1000 MortisCoin — уже полпути к легенде!"},
+            20: {"coins": 1800,  "msg": "+1800 MortisCoin — ты уже среди элиты!"},
+            25: {"coins": 2500,  "msg": "+2500 MortisCoin — почти максимум, осталось немного!"},
         }
 
         for lvl in range(old_level + 1, new_level + 1):
             if lvl in premium_rewards:
                 rew = premium_rewards[lvl]
-                economy_data[user_id]["balance"] += rew["coins"]
+                economy_data[user_id]["balance"] = economy_data[user_id].get("balance", 0) + rew["coins"]
+                save_economy()  # сохраняем сразу после начисления монет
 
+                # Отправляем личное сообщение
                 try:
-                    user = bot.get_user(int(user_id))
-                    if user:
-                        await user.send(embed=discord.Embed(
+                    # Пытаемся использовать member, если он передан
+                    target = member if member else None
+                    if not target:
+                        target = bot.get_user(int(user_id))
+                        if not target:
+                            target = await bot.fetch_user(int(user_id))
+
+                    if target:
+                        embed_reward = discord.Embed(
                             title=f"✨ Premium-награда — уровень {lvl}",
                             description=rew["msg"],
                             color=0xFFD700,
                             timestamp=datetime.now(timezone.utc)
-                        ).set_thumbnail(url=user.display_avatar.url)
-                         .set_footer(text="MortisPlay • Сезон"))
+                        )
+                        embed_reward.set_thumbnail(url=target.display_avatar.url)
+                        embed_reward.set_footer(text="MortisPlay • Сезон • Премиум")
+                        await target.send(embed=embed_reward)
+                except discord.Forbidden:
+                    print(f"[PREMIUM REWARD DM] Пользователь {user_id} закрыл ЛС (уровень {lvl})")
                 except Exception as e:
-                    print(f"[PREMIUM REWARD DM] Не удалось отправить ЛС {user_id} за уровень {lvl}: {e}")
+                    print(f"[PREMIUM REWARD DM] Ошибка отправки ЛС {user_id} за уровень {lvl}: {e}")
 
-    # Сохраняем изменения (один раз в конце — после всех начислений)
+    # Сохраняем изменения (сезонные данные + экономику) один раз в конце
     save_seasons()
     save_economy()
 
@@ -4770,16 +4801,20 @@ async def season(ctx: commands.Context):
 
             elif self.current_page == "shop":
                 embed.title = "🪦 Лавка осколков душ"
-                embed.description = f"Осколков: **{format_number(season_points)}**\nВыбери дар ниже"
-                for item_id, item in SEASON_SHOP_ITEMS.items():
-                    owned = item_id in season_purchases
-                    icon = "✨" if item_id == "premium_pass" else "🛒"
-                    status = "✅ Куплено" if owned else f"{format_number(item['cost'])}"
-                    embed.add_field(
-                        name=f"{icon} {item['name']}",
-                        value=f"**{status}**\n{item['description']}",
-                        inline=False
-                    )
+                embed.description = (
+                    f"🪙 **{format_number(season_points)}** осколков\n\n"
+                    "Нажми на кнопку товара ниже → подтверди покупку в появившемся окне"
+                )
+                embed.add_field(
+                    name="Доступные дары",
+                    value=(
+                        "• Удвоитель XP 24ч — 1200 осколков\n"
+                        "• VIP на 3 дня — 2500 осколков\n"
+                        "• Premium Pass — 5000 осколков\n"
+                        "• 5000 MortisCoin — 3000 осколков"
+                    ),
+                    inline=False
+                )
 
             elif self.current_page == "top":
                 embed.title = "🏆 Топ восставших"
