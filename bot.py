@@ -4710,7 +4710,7 @@ async def shop(ctx: commands.Context):
         await ctx.send(embed=embed, view=view, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
-        
+
 
 @bot.hybrid_command(
     name="season",
@@ -4982,10 +4982,71 @@ async def season(ctx: commands.Context):
             self.current_page = "info"
             await self.update_embed(interaction)
 
-        @discord.ui.button(label="Пропуск", style=discord.ButtonStyle.blurple, emoji="✨", row=0)
-        async def pass_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-            self.current_page = "pass"
-            await self.update_embed(interaction)
+        # ─── Кнопка "Пропуск" ───
+    @discord.ui.button(label="Пропуск", style=discord.ButtonStyle.blurple, emoji="✨", row=0)
+    async def pass_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = "pass"
+        
+        # Очищаем поля и кнопки
+        embed.clear_fields()
+        self.clear_items()
+
+        if has_premium:
+            embed.title = "🔥 Premium Track — Активен!"
+            embed.description = f"**{self.ctx.author.mention}**, ты среди элиты нежити!"
+            embed.add_field(
+                name="Твои силы",
+                value=(
+                    "×1.5 к опыту • +200 🪙 еженедельно • +500 осколков при покупке\n"
+                    "Эксклюзивные дары на уровнях • Роль **Season Pass Holder** на 30 ур."
+                ),
+                inline=False
+            )
+        else:
+            embed.title = "🪦 Premium Track"
+            embed.description = (
+                f"**{self.ctx.author.mention}**, стань сильнее тьмы!\n"
+                "Активируй Premium Track за **5000 MortisCoin** (один раз)"
+            )
+            embed.add_field(name="Цена", value="**5000** 🪙", inline=True)
+            embed.add_field(
+                name="Что даёт",
+                value="×1.5 к опыту • +200 🪙/нед • +500 осколков • дары + роль на 30 ур.",
+                inline=False
+            )
+
+            # Добавляем кнопку покупки только если не куплено
+            buy_btn = Button(
+                label="Активировать за 5000 🪙",
+                style=discord.ButtonStyle.green,
+                emoji="✨"
+            )
+
+            async def buy_premium_callback(inter: discord.Interaction):
+                if inter.user.id != self.ctx.author.id:
+                    await inter.response.send_message("Это не твоё меню!", ephemeral=True)
+                    return
+                
+                modal = PremiumConfirmModal(self)
+                await inter.response.send_modal(modal)
+
+            buy_btn.callback = buy_premium_callback
+            self.add_item(buy_btn)
+
+        # Добавляем все основные кнопки обратно
+        self.add_item(self.info_button)
+        self.add_item(self.pass_button)
+        self.add_item(self.tasks_button)
+        self.add_item(self.shop_button)
+        self.add_item(self.top_button)
+        self.add_item(self.help_button)
+
+        # Обновляем сообщение
+        if interaction:
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            # Если initial — отправляем впервые
+            await self.ctx.send(embed=embed, view=self, ephemeral=True)
 
         @discord.ui.button(label="Задания", style=discord.ButtonStyle.green, emoji="📜", row=0)
         async def tasks_button(self, interaction: discord.Interaction, button: discord.ui.Button):
