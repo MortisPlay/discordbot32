@@ -368,7 +368,8 @@ def load_economy():
         # Новые поля для сезона и Premium Pass
         user_data.setdefault("season_points", 0)
         user_data.setdefault("season_purchases", [])
-        user_data.setdefault("premium_track_active", False)   # ← вот наш новый флаг
+        user_data.setdefault("premium_track_active", False)
+        user_data.setdefault("season_xp_boost_end", 0)  # ← добавляем это поле (0 = неактивен)
         
         # Если investments нет — создаём пустой список
         if "investments" not in user_data:
@@ -1304,20 +1305,33 @@ class SeasonConfirmModal(Modal, title="Подтверждение покупки
             save_economy()
 
         elif item["type"] == "boost":
-            # Пока заглушка — можно потом добавить поле xp_boost_end
-            msg = f"✅ **{item['name']}** активирован на 24 часа!"
-
-        elif item["type"] == "role":
-            role = discord.utils.get(interaction.guild.roles, name=item["role_name"])
-            if role:
-                await interaction.user.add_roles(role)
-                # Временная роль
-                temp_roles.setdefault(user_id, {})[str(role.id)] = (
-                    datetime.now(timezone.utc).timestamp() + (item["duration_days"] * 86400)
+            now = datetime.now(timezone.utc).timestamp()
+            duration_sec = item["duration_hours"] * 3600  # 24 часа
+            economy_data[user_id]["season_xp_boost_end"] = now + duration_sec
+            save_economy()
+            
+            remaining_h = item["duration_hours"]
+            msg = (
+                f"⚡ **{item['name']} активирован!**\n"
+                f"×2 к сезонному опыту на **{remaining_h} часов**!\n"
+                f"Осталось: **{remaining_h} ч** (до <t:{int(now + duration_sec)}:R>)"
+            )
+            
+            # Уведомление в ЛС
+            try:
+                embed_boost = discord.Embed(
+                    title="⚡ Удвоитель опыта активирован!",
+                    description=(
+                        f"Ты активировал **{item['name']}** за {format_number(item['cost'])} осколков!\n"
+                        f"Теперь весь сезонный опыт ×2 до <t:{int(now + duration_sec)}:R>"
+                    ),
+                    color=0xFFAA00,
+                    timestamp=datetime.now(timezone.utc)
                 )
-                msg = f"✅ Роль **{role.name}** выдана на {item['duration_days']} дня!"
-            else:
-                msg = f"{ECONOMY_EMOJIS['error']} Роль {item['role_name']} не найдена!"
+                embed_boost.set_thumbnail(url=interaction.user.display_avatar.url)
+                await interaction.user.send(embed=embed_boost)
+            except:
+                pass  # ЛС закрыты — ничего страшного
 
         elif item["type"] == "pass":
             # ─── АКТИВАЦИЯ PREMIUM PASS ───
@@ -2055,9 +2069,14 @@ async def voice_season_xp_task():
                 # За 5 минут начисляем примерно это количество
                 xp_to_add = int(xp_per_min * 5)
                 
-                # ← Добавляем +50% для Premium Pass
+                # Premium Pass +50%
                 if economy_data.get(user_id, {}).get("premium_track_active", False):
                     xp_to_add = int(xp_to_add * 1.5)
+                
+                # Удвоитель XP 24ч ×2 (самый последний множитель)
+                now_ts = datetime.now(timezone.utc).timestamp()
+                if economy_data.get(user_id, {}).get("season_xp_boost_end", 0) > now_ts:
+                    xp_to_add = int(xp_to_add * 2)
                 
                 # Проверка дневного лимита сезонного XP
                 today_str = datetime.now(timezone.utc).date().isoformat()
@@ -2419,14 +2438,21 @@ async def on_message(message):
 
             # Сезонный XP
             xp_per_msg = current_season["xp_per_message"]
-
+            
             # VIP ×2
             if is_vip(message.author):
                 xp_per_msg = int(xp_per_msg * 2)
-
+            
             # Premium Pass +50%
             if economy_data[user_id].get("premium_track_active", False):
                 xp_per_msg = int(xp_per_msg * 1.5)
+            
+            # Удвоитель XP 24ч ×2 (самый последний множитель)
+            now_ts = datetime.now(timezone.utc).timestamp()
+            if economy_data[user_id].get("season_xp_boost_end", 0) > now_ts:
+                xp_per_msg = int(xp_per_msg * 2)
+                # Можно добавить эмодзи в лог или сообщение, если хочешь
+                # print(f"[XP BOOST] ×2 применён для {user_id}")
 
             today_str = datetime.now(timezone.utc).date().isoformat()
             if daily_season_xp_reset.get(user_id) != today_str:
@@ -4773,6 +4799,19 @@ async def season(ctx: commands.Context):
 
                 status = "✨ Premium Track" if has_premium else "🪦 Free Track"
                 embed.add_field(name="Статус", value=status, inline=False)
+
+                # Показываем удвоитель XP, если активен
+                now_ts = datetime.now(timezone.utc).timestamp()
+                boost_end = economy_data.get(user_id, {}).get("season_xp_boost_end", 0)
+                if boost_end > now_ts:
+                    remaining_sec = int(boost_end - now_ts)
+                    remaining_h = remaining_sec // 3600
+                    remaining_m = (remaining_sec % 3600) // 60
+                    embed.add_field(
+                        name="⚡ Удвоитель XP",
+                        value=f"Активен! ×2 к опыту\nОсталось: **{remaining_h}ч {remaining_m}мин**",
+                        inline=False
+                    )
 
             elif self.current_page == "pass":
                 if has_premium:
