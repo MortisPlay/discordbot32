@@ -4990,6 +4990,114 @@ def get_xp_for_level(level: int) -> int:
     if level <= 1:
         return 0
     return int(100 * (level ** 1.5))
+
+@bot.hybrid_command(
+    name="admin_coins",
+    description="⚙️ Изменить количество монет у пользователя (только для админов)"
+)
+@app_commands.describe(
+    member="Кому изменить баланс (можно указать себя)",
+    amount="На сколько изменить (положительное — добавить, отрицательное — снять)",
+    reason="Причина изменения (обязательно)"
+)
+@commands.has_permissions(administrator=True)  # или можно сделать проверку через is_moderator + OWNER_ID
+async def admin_coins(ctx: commands.Context, member: discord.Member, amount: int, *, reason: str):
+    """Изменение баланса с компенсацией казны сервера"""
+
+    # Проверка прав (можно усилить)
+    if not (ctx.author.guild_permissions.administrator or ctx.author.id == OWNER_ID):
+        await ctx.send("❌ Доступ только администраторам и владельцу бота.", ephemeral=True)
+        return
+
+    if member.bot:
+        await ctx.send("❌ Нельзя изменять баланс ботов.", ephemeral=True)
+        return
+
+    user_id = str(member.id)
+    if user_id not in economy_data:
+        economy_data[user_id] = {"balance": 0}
+    
+    old_balance = economy_data[user_id]["balance"]
+    new_balance = old_balance + amount
+
+    # Нельзя уводить в минус без веской причины (можно убрать это ограничение)
+    if new_balance < 0 and amount < 0:
+        await ctx.send(f"❌ Баланс не может стать отрицательным ({new_balance}).", ephemeral=True)
+        return
+
+    delta = amount  # изменение
+
+    # ─── Расчёт компенсации в казну ───
+    server_tax = 0
+
+    if delta > 0:
+        if delta <= 500:
+            server_tax = 0
+        elif delta <= 2000:
+            server_tax = int(delta * 0.15)
+        elif delta <= 10000:
+            server_tax = int(delta * 0.30)
+        elif delta <= 50000:
+            server_tax = int(delta * 0.50)
+        else:
+            server_tax = int(delta * 0.70)
+
+    # Реальное изменение баланса пользователя
+    real_amount = delta - server_tax if delta > 0 else delta
+
+    # Применяем изменения
+    economy_data[user_id]["balance"] += real_amount
+    economy_data["server_vault"] = economy_data.get("server_vault", 0) + server_tax
+
+    save_economy()
+
+    # ─── Формируем сообщение ───
+    embed = discord.Embed(
+        title="⚙️ Изменение баланса",
+        color=0x00ff9d if delta > 0 else 0xff5555,
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    embed.add_field(name="Пользователь", value=member.mention, inline=True)
+    embed.add_field(name="Было", value=f"{format_number(old_balance)} 🪙", inline=True)
+    embed.add_field(name="Стало", value=f"{format_number(economy_data[user_id]['balance'])} 🪙", inline=True)
+
+    change_text = f"**{format_number(delta)}** 🪙" if delta >= 0 else f"**{format_number(delta)}** 🪙"
+    embed.add_field(name="Изменение", value=change_text, inline=False)
+
+    if server_tax > 0:
+        embed.add_field(
+            name="Компенсация в казну",
+            value=f"+{format_number(server_tax)} 🪙 ({int(server_tax/delta*100)}%)",
+            inline=False
+        )
+
+    embed.add_field(name="Причина", value=reason, inline=False)
+    embed.add_field(name="Выполнил", value=ctx.author.mention, inline=True)
+
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"ID: {member.id} • Казна: {format_number(economy_data['server_vault'])}")
+
+    await ctx.send(embed=embed, ephemeral=False)
+
+    # Лог в мод-канал
+    log_embed = discord.Embed(
+        title="🛠 Изменение баланса (админ)",
+        color=0x5865F2,
+        timestamp=datetime.now(timezone.utc)
+    )
+    log_embed.add_field(name="Пользователь", value=f"{member} ({member.id})", inline=True)
+    log_embed.add_field(name="Изменение", value=f"{format_number(delta)} → реально {format_number(real_amount)}", inline=True)
+    if server_tax > 0:
+        log_embed.add_field(name="В казну", value=f"+{format_number(server_tax)}", inline=True)
+    log_embed.add_field(name="Было → Стало", value=f"{format_number(old_balance)} → {format_number(economy_data[user_id]['balance'])}", inline=False)
+    log_embed.add_field(name="Причина", value=reason, inline=False)
+    log_embed.add_field(name="Админ", value=ctx.author.mention, inline=True)
+
+    if MOD_LOG_CHANNEL_ID:
+        log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
+        if log_ch:
+            await log_ch.send(embed=log_embed)    
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
