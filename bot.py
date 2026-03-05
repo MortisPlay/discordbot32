@@ -4710,6 +4710,7 @@ async def shop(ctx: commands.Context):
         await ctx.send(embed=embed, view=view, ephemeral=True)
     except Exception as e:
         await send_error_embed(ctx, str(e))
+        
 
 @bot.hybrid_command(
     name="season",
@@ -4782,7 +4783,65 @@ async def season(ctx: commands.Context):
         await ctx.send(embed=embed, ephemeral=True)
         return
 
-    # ─── Для тестеров: интерактивное меню с кнопками ───
+    # ─── Модалка подтверждения покупки Premium ───
+    class PremiumConfirmModal(Modal, title="Активация Premium Track"):
+        def __init__(self, parent_view):
+            super().__init__()
+            self.parent_view = parent_view
+            self.add_item(TextInput(
+                label="Подтверждение",
+                placeholder="Напиши 'подтверждаю' для активации",
+                style=discord.TextStyle.short,
+                required=True
+            ))
+
+        async def on_submit(self, interaction: discord.Interaction):
+            if self.children[0].value.lower().strip() != "подтверждаю":
+                return await interaction.response.send_message("❌ Активация отменена.", ephemeral=True)
+
+            uid = str(interaction.user.id)
+
+            # Проверка баланса
+            if uid not in economy_data or economy_data[uid].get("balance", 0) < 5000:
+                return await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно 5000 🪙", ephemeral=True
+                )
+
+            # Если уже куплено (на всякий случай)
+            if economy_data[uid].get("premium_track_active", False):
+                return await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['warning']} Premium Track уже активирован!", ephemeral=True
+                )
+
+            # Списание и активация
+            economy_data[uid]["balance"] -= 5000
+            economy_data[uid]["premium_track_active"] = True
+            economy_data[uid]["season_points"] = economy_data[uid].get("season_points", 0) + 500
+            save_economy()
+
+            # Успешный эмбед
+            success = discord.Embed(
+                title="✨ Premium Track активирован!",
+                description=(
+                    f"Поздравляю, {interaction.user.mention}! Ты теперь часть элиты.\n"
+                    f"Мгновенно получено **+500** сезонных осколков!\n\n"
+                    "**Твои новые силы:**\n"
+                    "×1.5 к сезонному опыту\n"
+                    "+200 MortisCoin каждую неделю\n"
+                    "Эксклюзивные награды на уровнях\n"
+                    "Роль **Season Pass Holder** на 30 уровне"
+                ),
+                color=PREMIUM_COLOR,
+                timestamp=datetime.now(timezone.utc)
+            )
+            success.set_thumbnail(url=interaction.user.display_avatar.url)
+            await interaction.response.send_message(embed=success, ephemeral=True)
+
+            # Обновляем основное меню — переключаем на страницу "pass"
+            self.parent_view.current_page = "pass"
+            await self.parent_view.update_embed(interaction)
+
+    # ─── Интерактивное меню для тестеров ───
     class SeasonMenuView(View):
         def __init__(self, ctx):
             super().__init__(timeout=180)
@@ -4790,12 +4849,14 @@ async def season(ctx: commands.Context):
             self.current_page = "info"
 
         async def update_embed(self, interaction: discord.Interaction | None = None, initial: bool = False):
-            # Очищаем старый контент
             embed.clear_fields()
             embed.title = ""
             embed.description = ""
 
-            # Заполняем в зависимости от страницы
+            # Общие элементы
+            embed.set_thumbnail(url=self.ctx.author.display_avatar.url)
+            embed.set_footer(text=f"MortisPlay • Сезон • {datetime.now(timezone.utc).strftime('%d.%m.%Y')}")
+
             if self.current_page == "info":
                 lvl = 1
                 while get_xp_for_level(lvl + 1) <= season_xp:
@@ -4825,7 +4886,6 @@ async def season(ctx: commands.Context):
                 status = "✨ Premium Track" if has_premium else "🪦 Free Track"
                 embed.add_field(name="Статус", value=status, inline=False)
 
-                # Показываем удвоитель XP, если активен
                 now_ts = datetime.now(timezone.utc).timestamp()
                 boost_end = economy_data.get(user_id, {}).get("season_xp_boost_end", 0)
                 if boost_end > now_ts:
@@ -4854,10 +4914,14 @@ async def season(ctx: commands.Context):
                     embed.title = "🪦 Premium Track"
                     embed.description = (
                         f"**{self.ctx.author.mention}**, стань сильнее тьмы!\n"
-                        "Активируй за **5000 MortisCoin**"
+                        "Активируй Premium Track за **5000 MortisCoin** (один раз)"
                     )
-                    embed.add_field(name="Цена", value="**5000** 🪙 (один раз)", inline=True)
-                    embed.add_field(name="Бонусы", value="×1.5 XP • +200 🪙/нед • +500 очков • дары + роль", inline=False)
+                    embed.add_field(name="Цена", value="**5000** 🪙", inline=True)
+                    embed.add_field(
+                        name="Что даёт",
+                        value="×1.5 к опыту • +200 🪙/нед • +500 осколков • дары + роль на 30 ур.",
+                        inline=False
+                    )
 
             elif self.current_page == "tasks":
                 embed.title = "📜 Задания воскрешения"
@@ -4906,18 +4970,13 @@ async def season(ctx: commands.Context):
                     "3. Команды: info, pass, tasks, shop, top, help"
                 )
 
-            embed.set_thumbnail(url=self.ctx.author.display_avatar.url)
-            embed.set_footer(text=f"MortisPlay • Сезон • {datetime.now(timezone.utc).strftime('%d.%m.%Y')}")
-
-            # Отправляем или редактируем
+            # Отправка / редактирование
             if initial:
                 await self.ctx.send(embed=embed, view=self, ephemeral=True)
-            elif interaction is not None:
+            elif interaction:
                 await interaction.response.edit_message(embed=embed, view=self)
-            else:
-                print("[SEASON MENU] Ошибка: update_embed вызван без interaction и initial")
 
-        # ─── Кнопки ───
+        # ─── Кнопки основного меню ───
         @discord.ui.button(label="Инфо", style=discord.ButtonStyle.primary, emoji="📊", row=0)
         async def info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.current_page = "info"
@@ -4936,30 +4995,27 @@ async def season(ctx: commands.Context):
         @discord.ui.button(label="Магазин", style=discord.ButtonStyle.grey, emoji="🛒", row=1)
         async def shop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.current_page = "shop"
-
             shop_embed = discord.Embed(
                 title="🪦 Лавка осколков душ",
                 description=(
                     f"🪙 **{format_number(season_points)}** осколков\n\n"
-                    "Выбери товар ниже и подтверди покупку в модальном окне ↓"
+                    "Нажми на кнопку товара ниже → подтверди покупку"
                 ),
                 color=0x2E1A47
             )
             shop_embed.add_field(
                 name="Доступные дары",
                 value=(
-                    "⚡ **Удвоитель XP 24ч** — 1200 осколков\n"
-                    "💎 **VIP на 3 дня** — 2500 осколков\n"
-                    "✨ **Premium Pass** — 5000 осколков\n"
-                    "🪙 **5000 MortisCoin** — 3000 осколков"
+                    "⚡ Удвоитель XP 24ч — 1200\n"
+                    "💎 VIP на 3 дня — 2500\n"
+                    "✨ Premium Pass — 5000\n"
+                    "🪙 5000 MortisCoin — 3000"
                 ),
                 inline=False
             )
-            shop_embed.set_footer(text="Нажми на кнопку товара → подтверди 'подтверждаю'")
+            shop_embed.set_footer(text="Нажми товар → подтверди 'подтверждаю'")
 
-            # Передаём себя (текущий SeasonMenuView) в SeasonShopView
-            shop_view = SeasonShopView(self.ctx.author.id, self)  # ← вот ключевая строка!
-
+            shop_view = SeasonShopView(self.ctx.author.id, self)
             await interaction.response.edit_message(embed=shop_embed, view=shop_view)
 
         @discord.ui.button(label="Топ", style=discord.ButtonStyle.grey, emoji="🏆", row=1)
@@ -4972,9 +5028,71 @@ async def season(ctx: commands.Context):
             self.current_page = "help"
             await self.update_embed(interaction)
 
-    # Создаём и запускаем меню
+    # Создаём меню
     view = SeasonMenuView(ctx)
-    await view.update_embed(initial=True)  # Только здесь отправляем сообщение
+
+    # Переопределяем кнопку "Пропуск" для добавления покупки
+    async def updated_pass_button(interaction: discord.Interaction, button: discord.ui.Button):
+        view.current_page = "pass"
+        embed.clear_fields()
+
+        if has_premium:
+            embed.title = "🔥 Premium Track — Активен!"
+            embed.description = f"**{ctx.author.mention}**, ты среди элиты нежити!"
+            embed.add_field(
+                name="Твои силы",
+                value=(
+                    "×1.5 к опыту • +200 🪙 еженедельно • +500 осколков при покупке\n"
+                    "Эксклюзивные дары на уровнях • Роль **Season Pass Holder** на 30 ур."
+                ),
+                inline=False
+            )
+        else:
+            embed.title = "🪦 Premium Track"
+            embed.description = (
+                f"**{ctx.author.mention}**, стань сильнее тьмы!\n"
+                "Активируй Premium Track за **5000 MortisCoin** (один раз)"
+            )
+            embed.add_field(name="Цена", value="**5000** 🪙", inline=True)
+            embed.add_field(
+                name="Что даёт",
+                value="×1.5 к опыту • +200 🪙/нед • +500 осколков • дары + роль на 30 ур.",
+                inline=False
+            )
+
+        view.clear_items()
+
+        if not has_premium:
+            buy_premium_btn = Button(
+                label="Активировать за 5000 🪙",
+                style=discord.ButtonStyle.green,
+                emoji="✨"
+            )
+
+            async def buy_callback(inter: discord.Interaction):
+                if inter.user.id != ctx.author.id:
+                    return await inter.response.send_message("Это не твоё меню!", ephemeral=True)
+                modal = PremiumConfirmModal(view)
+                await inter.response.send_modal(modal)
+
+            buy_premium_btn.callback = buy_callback
+            view.add_item(buy_premium_btn)
+
+        # Добавляем остальные кнопки обратно (если нужно)
+        view.add_item(view.info_button)
+        view.add_item(view.pass_button)
+        view.add_item(view.tasks_button)
+        view.add_item(view.shop_button)
+        view.add_item(view.top_button)
+        view.add_item(view.help_button)
+
+        await view.update_embed(interaction)
+
+    # Заменяем оригинальный callback кнопки "Пропуск"
+    view.pass_button.callback = updated_pass_button
+
+    # Запускаем меню
+    await view.update_embed(initial=True)
 
 @tasks.loop(minutes=10)
 async def autosave_seasons_task():
