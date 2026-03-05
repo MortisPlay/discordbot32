@@ -82,6 +82,12 @@ SHOP_ITEMS = {
         "price": 1000,
         "duration_days": 7,
         "description": "×1.5 к доходу от сообщений и daily"
+    },
+    "premium_pass": {                           # ← добавляем сюда
+        "name": "Premium Pass (Season)",
+        "price": 5000,
+        "description": "Активация Premium Track: ×1.5 сезонный XP, +500 осколков сразу, +200 монет/нед, эксклюзивные награды",
+        "type": "premium_pass"                  # ← важный ключ, чтобы отличать от других
     }
 }
 # ───────────────────────────────────────────────
@@ -1256,39 +1262,101 @@ class ShopConfirmModal(Modal, title="Подтверждение покупки")
             style=discord.TextStyle.short,
             required=True
         ))
+
     async def on_submit(self, interaction: discord.Interaction):
         if self.children[0].value.lower().strip() != "подтверждаю":
-            return await interaction.response.send_message("❌ Покупка отменена. Нужно написать 'подтверждаю'.", ephemeral=True)
-        user_id = str(interaction.user.id)
-        shop_item = SHOP_ITEMS[self.item_key]
-        # Финальная проверка баланса (на случай race-condition)
-        if user_id not in economy_data or economy_data[user_id].get("balance", 0) < self.final_price:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Требуется {format_number(self.final_price)}", ephemeral=True
+                "❌ Покупка отменена. Нужно написать 'подтверждаю'.", ephemeral=True
             )
-        # Списание
+
+        user_id = str(interaction.user.id)
+
+        # Проверка существования пользователя в базе
+        if user_id not in economy_data:
+            economy_data[user_id] = {"balance": 0}
+            save_economy()
+
+        # Финальная проверка баланса
+        if economy_data[user_id].get("balance", 0) < self.final_price:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Требуется {format_number(self.final_price)}",
+                ephemeral=True
+            )
+
+        # Получаем товар
+        shop_item = SHOP_ITEMS[self.item_key]
+
+        # Списание денег
         economy_data[user_id]["balance"] -= self.final_price
         save_economy()
-        # Выдача товара
+
+        msg = ""
+
+        # ─── Обработка разных типов товаров ───
         if self.item_key == "vip":
             role = discord.utils.get(interaction.guild.roles, name="VIP")
             if role:
                 await interaction.user.add_roles(role)
-                temp_roles.setdefault(user_id, {})[str(role.id)] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
-                msg = f"{ECONOMY_EMOJIS['success']} **VIP** на 1 месяц куплен! 🎉\n×2 доход • VIP-чат • ×2 войс • приоритет"
+                temp_roles.setdefault(user_id, {})[str(role.id)] = (
+                    datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+                )
+                msg = (
+                    f"{ECONOMY_EMOJIS['success']} **VIP** на 1 месяц куплен! 🎉\n"
+                    f"×2 доход • VIP-чат • ×2 войс • приоритет тикетов • закрытые ивенты"
+                )
             else:
                 msg = f"{ECONOMY_EMOJIS['error']} Роль VIP не найдена! Монеты списаны, но роль не выдана."
+
         elif self.item_key == "multiplier":
             if "multiplier_end" not in economy_data[user_id]:
                 economy_data[user_id]["multiplier_end"] = 0
-            economy_data[user_id]["multiplier_end"] = datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+            economy_data[user_id]["multiplier_end"] = (
+                datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
+            )
             save_economy()
             msg = f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀"
+
+        elif self.item_key == "premium_pass":
+            # Проверка — уже куплен?
+            if economy_data[user_id].get("premium_track_active", False):
+                return await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['warning']} Premium Track уже активирован!",
+                    ephemeral=True
+                )
+
+            # Активация Premium Track
+            economy_data[user_id]["premium_track_active"] = True
+            # +500 сезонных очков сразу
+            economy_data[user_id]["season_points"] = (
+                economy_data[user_id].get("season_points", 0) + 500
+            )
+            save_economy()
+
+            msg = (
+                f"{ECONOMY_EMOJIS['success']} **Premium Pass активирован!** ✨\n\n"
+                f"Мгновенно получено **+500** сезонных осколков!\n\n"
+                "**Твои новые силы Premium Track:**\n"
+                "• ×1.5 к сезонному опыту (сообщения, голос, daily, задания)\n"
+                "• +200 MortisCoin каждую неделю (понедельник 00:00 UTC)\n"
+                "• Эксклюзивные награды на уровнях 5/10/15/20/25/30\n"
+                "• Роль **Season Pass Holder** при достижении 30 уровня"
+            )
+
+        # Сообщение об успехе
         await interaction.response.send_message(msg, ephemeral=True)
-        # Лог
+
+        # Лог покупки
+        log_desc = (
+            f"**Пользователь:** {interaction.user.mention}\n"
+            f"**Товар:** {self.item_name}\n"
+            f"**Цена:** {format_number(self.final_price)} {ECONOMY_EMOJIS['coin']}"
+        )
+        if self.item_key == "premium_pass":
+            log_desc += "\n**Получено:** +500 сезонных очков"
+
         await send_mod_log(
             title="🛒 Покупка в магазине",
-            description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {self.item_name}\n**Цена:** {format_number(self.final_price)}",
+            description=log_desc,
             color=COLORS["economy"]
         )
 class SeasonConfirmModal(Modal, title="Подтверждение покупки"):
@@ -1410,9 +1478,15 @@ class ShopView(View):
     @discord.ui.button(label="Купить VIP", style=discord.ButtonStyle.green, emoji="💎", custom_id="shop_vip", row=0)
     async def buy_vip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "vip")
+
     @discord.ui.button(label="Купить ×1.5", style=discord.ButtonStyle.blurple, emoji="🚀", custom_id="shop_multiplier", row=0)
     async def buy_multiplier(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "multiplier")
+
+    @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, emoji="✨", custom_id="shop_premium", row=1)
+    async def buy_premium(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, "premium_pass")
+            
     async def _handle_button(self, interaction: discord.Interaction, item_key: str):
         shop_item = SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
