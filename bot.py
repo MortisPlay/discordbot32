@@ -433,11 +433,36 @@ load_cases()
 # ───────────────────────────────────────────────
 # ФУНКЦИИ ДЛЯ ПРОВЕРКИ ПРАВ
 # ───────────────────────────────────────────────
-def is_moderator(member: discord.Member) -> bool:
-    """Проверяет, является ли пользователь модератором"""
-    return (member.guild_permissions.manage_messages or
-            member.guild_permissions.administrator or
-            member.id == OWNER_ID)
+def is_moderator(ctx_or_member) -> bool:
+    """
+    Проверяет, является ли пользователь модератором.
+    Работает с:
+    - discord.Member
+    - commands.Context (обычные и гибридные команды)
+    - discord.Interaction (слэш-команды)
+    """
+    # Достаём участника сервера
+    if isinstance(ctx_or_member, discord.Member):
+        member = ctx_or_member
+    elif isinstance(ctx_or_member, commands.Context):
+        member = ctx_or_member.author
+    elif isinstance(ctx_or_member, discord.Interaction):
+        member = ctx_or_member.user
+        # Если это не участник сервера (DM или группа) — сразу нет прав
+        if not isinstance(member, discord.Member) or not member.guild:
+            return False
+    else:
+        return False
+
+    # Если нет гильдии или участник — бота — прав нет
+    if not member.guild or member.bot:
+        return False
+
+    return (
+        member.guild_permissions.manage_messages or
+        member.guild_permissions.administrator or
+        member.id == OWNER_ID
+    )
 def is_protected_from_automod(member: discord.Member) -> bool:
     """Проверяет, защищен ли пользователь от автомодерации"""
     return (member.guild_permissions.administrator or
