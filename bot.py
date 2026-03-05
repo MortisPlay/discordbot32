@@ -4738,20 +4738,17 @@ async def season(ctx: commands.Context):
     season_xp        = season_player.get("season_xp", 0)
     season_level     = season_player.get("season_level", 1)
     season_points    = economy_data.get(user_id, {}).get("season_points", 0)
-    season_purchases = economy_data.get(user_id, {}).get("season_purchases", [])
     has_premium      = economy_data.get(user_id, {}).get("premium_track_active", False)
-    claimed_rewards  = season_player.get("claimed_rewards", [])
 
     # Цвета
     BASE_COLOR    = 0x2E1A47
     PREMIUM_COLOR = 0xFF2D55
-    ACCENT_COLOR  = 0xFFD700
 
     embed = discord.Embed(color=PREMIUM_COLOR if has_premium else BASE_COLOR)
 
-    # Для обычных пользователей — заглушка разработки
+    # Заглушка для нетестеров
     if not is_tester(ctx.author):
-        dev_progress = 61  # можешь менять
+        dev_progress = 61
         bar = create_progress_bar(dev_progress, 61, length=20)
 
         embed.title = "🪦 Premium Track • В разработке"
@@ -4760,7 +4757,6 @@ async def season(ctx: commands.Context):
             "Скоро Premium Track откроется **всем** участникам сервера!\n"
             "Будет мощно — следи за анонсами."
         )
-
         embed.add_field(
             name="Прогресс воскрешения",
             value=f"**{bar}**  **{dev_progress}%** готово\n"
@@ -4770,85 +4766,25 @@ async def season(ctx: commands.Context):
                   f"• Роль Season Pass Holder",
             inline=False
         )
-
         embed.add_field(
             name="Как получить доступ раньше?",
             value="Получи роль **Тестировщик** — напиши администратору",
             inline=False
         )
-
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
         embed.set_footer(text="MortisPlay • Скоро для всех • v0.5")
         
         await ctx.send(embed=embed, ephemeral=True)
         return
 
-    # ─── Модалка подтверждения покупки Premium ───
-    class PremiumConfirmModal(Modal, title="Активация Premium Track"):
-        def __init__(self, parent_view):
-            super().__init__()
-            self.parent_view = parent_view
-            self.add_item(TextInput(
-                label="Подтверждение",
-                placeholder="Напиши 'подтверждаю' для активации",
-                style=discord.TextStyle.short,
-                required=True
-            ))
-
-        async def on_submit(self, interaction: discord.Interaction):
-            if self.children[0].value.lower().strip() != "подтверждаю":
-                return await interaction.response.send_message("❌ Активация отменена.", ephemeral=True)
-
-            uid = str(interaction.user.id)
-
-            # Проверка баланса
-            if uid not in economy_data or economy_data[uid].get("balance", 0) < 5000:
-                return await interaction.response.send_message(
-                    f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно 5000 🪙", ephemeral=True
-                )
-
-            # Уже куплено?
-            if economy_data[uid].get("premium_track_active", False):
-                return await interaction.response.send_message(
-                    f"{ECONOMY_EMOJIS['warning']} Premium Track уже активирован!", ephemeral=True
-                )
-
-            # Покупка
-            economy_data[uid]["balance"] -= 5000
-            economy_data[uid]["premium_track_active"] = True
-            economy_data[uid]["season_points"] = economy_data[uid].get("season_points", 0) + 500
-            save_economy()
-
-            # Успешный ответ
-            success = discord.Embed(
-                title="✨ Premium Track активирован!",
-                description=(
-                    f"Поздравляю, {interaction.user.mention}! Ты теперь часть элиты.\n"
-                    f"Мгновенно получено **+500** сезонных осколков!\n\n"
-                    "**Твои новые силы:**\n"
-                    "×1.5 к сезонному опыту\n"
-                    "+200 MortisCoin каждую неделю\n"
-                    "Эксклюзивные награды на уровнях\n"
-                    "Роль **Season Pass Holder** на 30 уровне"
-                ),
-                color=PREMIUM_COLOR,
-                timestamp=datetime.now(timezone.utc)
-            )
-            success.set_thumbnail(url=interaction.user.display_avatar.url)
-            await interaction.response.send_message(embed=success, ephemeral=True)
-
-            # Обновляем меню на страницу "pass"
-            self.parent_view.current_page = "pass"
-            await self.parent_view.update_embed(interaction)
-
-    # ─── Основное меню ───
+    # ─── Основное меню сезона ───
     class SeasonMenuView(View):
         def __init__(self, ctx):
             super().__init__(timeout=300)
             self.ctx = ctx
             self.current_page = "info"
 
-        async def update_embed(self, interaction: discord.Interaction | None = None, initial: bool = False):
+        async def update_embed(self, interaction=None, initial=False):
             embed.clear_fields()
             embed.title = ""
             embed.description = ""
@@ -4885,40 +4821,33 @@ async def season(ctx: commands.Context):
                 status = "✨ Premium Track" if has_premium else "🪦 Free Track"
                 embed.add_field(name="Статус", value=status, inline=False)
 
-                now_ts = datetime.now(timezone.utc).timestamp()
-                boost_end = economy_data.get(user_id, {}).get("season_xp_boost_end", 0)
-                if boost_end > now_ts:
-                    remaining_sec = int(boost_end - now_ts)
-                    remaining_h = remaining_sec // 3600
-                    remaining_m = (remaining_sec % 3600) // 60
-                    embed.add_field(
-                        name="⚡ Удвоитель XP",
-                        value=f"Активен! ×2 к опыту\nОсталось: **{remaining_h}ч {remaining_m}мин**",
-                        inline=False
-                    )
-
             elif self.current_page == "pass":
+                embed.title = "🔥 Premium Track — Элита нежити"
+                embed.description = (
+                    f"**{self.ctx.author.mention}**, вот что даёт **Premium Track**:\n\n"
+                    "• ×1.5 к сезонному опыту (сообщения, голос, daily, задания)\n"
+                    "• +200 MortisCoin каждую неделю (понедельник 00:00 UTC)\n"
+                    "• +500 сезонных осколков сразу после активации\n"
+                    "• Эксклюзивные награды на уровнях 5/10/15/20/25/30\n"
+                    "• Роль **Season Pass Holder** при достижении 30 уровня\n\n"
+                    f"Текущий статус: **{'Активен' if has_premium else 'Не активен'}**"
+                )
+
                 if has_premium:
-                    embed.title = "🔥 Premium Track — Активен!"
-                    embed.description = f"**{self.ctx.author.mention}**, ты среди элиты нежити!"
                     embed.add_field(
-                        name="Твои силы",
-                        value=(
-                            "×1.5 к опыту • +200 🪙 еженедельно • +500 осколков при покупке\n"
-                            "Эксклюзивные дары на уровнях • Роль **Season Pass Holder** на 30 ур."
-                        ),
+                        name="Как обновить",
+                        value="У тебя уже активен Premium Track!",
                         inline=False
                     )
                 else:
-                    embed.title = "🪦 Premium Track"
-                    embed.description = (
-                        f"**{self.ctx.author.mention}**, стань сильнее тьмы!\n"
-                        "Активируй Premium Track за **5000 MortisCoin** (один раз)"
-                    )
-                    embed.add_field(name="Цена", value="**5000** 🪙", inline=True)
                     embed.add_field(
-                        name="Что даёт",
-                        value="×1.5 к опыту • +200 🪙/нед • +500 осколков • дары + роль на 30 ур.",
+                        name="Как получить",
+                        value="Перейди в `/shop` → Premium Pass за **5000 MortisCoin**",
+                        inline=False
+                    )
+                    embed.add_field(
+                        name="Почему стоит купить",
+                        value="Значительно ускоряет прокачку + эксклюзивные бонусы и награды",
                         inline=False
                     )
 
@@ -4964,18 +4893,17 @@ async def season(ctx: commands.Context):
                     "   • Сообщения → +3 XP (Premium +4.5)\n"
                     "   • Голос → +2 XP/мин (Premium +3)\n"
                     "   • `/daily` → +150 XP (Premium +225 +200 🪙)\n\n"
-                    "2. Premium Track (5000 🪙):\n"
+                    "2. Premium Track (5000 🪙 в /shop):\n"
                     "   ×1.5 XP • +200/нед • +500 очков • дары • роль на 30 ур.\n\n"
                     "3. Команды: info, pass, tasks, shop, top, help"
                 )
 
-            # Отправляем или редактируем
             if initial:
                 await self.ctx.send(embed=embed, view=self, ephemeral=True)
-            elif interaction is not None:
+            elif interaction:
                 await interaction.response.edit_message(embed=embed, view=self)
 
-        # ─── Кнопки навигации ───
+        # Кнопки навигации
         @discord.ui.button(label="Инфо", style=discord.ButtonStyle.primary, emoji="📊", row=0)
         async def info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.current_page = "info"
@@ -5028,7 +4956,6 @@ async def season(ctx: commands.Context):
             self.current_page = "help"
             await self.update_embed(interaction)
 
-    # Создаём и запускаем меню
     view = SeasonMenuView(ctx)
     await view.update_embed(initial=True)
 
