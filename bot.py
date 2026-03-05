@@ -1404,15 +1404,17 @@ class ShopView(View):
 
 class SeasonShopView(View):
     def __init__(self, author_id: int):
-        super().__init__(timeout=300)
+        super().__init__(timeout=300)  # 5 минут таймаут
         self.author_id = author_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Проверяем, что только автор может взаимодействовать"""
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Это не твоё меню!", ephemeral=True)
             return False
         return True
 
+    # Кнопка обновления баланса (всегда видна)
     @discord.ui.button(label="Обновить осколки", style=discord.ButtonStyle.grey, emoji="🔄", row=2)
     async def refresh_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
@@ -1422,47 +1424,54 @@ class SeasonShopView(View):
             ephemeral=True
         )
 
-    @discord.ui.button(label="Удвоитель XP 24ч", style=discord.ButtonStyle.green, row=0)
+    # Кнопки покупки — все в одном ряду (можно распределить по row=0 и row=1)
+    @discord.ui.button(label="Удвоитель XP 24ч", style=discord.ButtonStyle.green, emoji="⚡", row=0)
     async def buy_xp_boost(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "xp_boost_24h")
 
-    @discord.ui.button(label="VIP на 3 дня", style=discord.ButtonStyle.green, row=0)
+    @discord.ui.button(label="VIP на 3 дня", style=discord.ButtonStyle.green, emoji="💎", row=0)
     async def buy_vip_3d(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "vip_3d")
 
-    @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, row=1)
+    @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, emoji="✨", row=1)
     async def buy_premium_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "premium_pass")
 
-    @discord.ui.button(label="5000 MortisCoin", style=discord.ButtonStyle.green, row=1)
+    @discord.ui.button(label="5000 MortisCoin", style=discord.ButtonStyle.green, emoji="🪙", row=1)
     async def buy_coins_5000(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "coins_5000")
 
     async def _buy_item(self, interaction: discord.Interaction, item_key: str):
+        """Общая логика покупки для всех товаров"""
         item = SEASON_SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
 
+        # Инициализация данных пользователя, если их нет
         if user_id not in economy_data:
             economy_data[user_id] = {}
-        if "season_points" not in economy_data[user_id]:
-            economy_data[user_id]["season_points"] = 0
-        if "season_purchases" not in economy_data[user_id]:
-            economy_data[user_id]["season_purchases"] = []
+        economy_data[user_id].setdefault("season_points", 0)
+        economy_data[user_id].setdefault("season_purchases", [])
 
         points = economy_data[user_id]["season_points"]
 
+        # Проверка: уже куплено?
         if item_key in economy_data[user_id]["season_purchases"]:
-            return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['warning']} Ты уже купил **{item['name']}**!",
+            await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['warning']} Ты уже приобрёл **{item['name']}**!",
                 ephemeral=True
             )
+            return
 
+        # Проверка: хватает ли осколков?
         if points < item["cost"]:
-            return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно осколков!\nНужно: **{format_number(item['cost'])}**, у тебя: **{format_number(points)}**",
+            await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Недостаточно осколков!\n"
+                f"Нужно: **{format_number(item['cost'])}**, у тебя: **{format_number(points)}**",
                 ephemeral=True
             )
+            return
 
+        # Открываем модалку подтверждения
         modal = SeasonConfirmModal(item_key, item["name"], item["cost"])
         await interaction.response.send_modal(modal)
 
@@ -4862,7 +4871,29 @@ async def season(ctx: commands.Context):
         @discord.ui.button(label="Магазин", style=discord.ButtonStyle.grey, emoji="🛒", row=1)
         async def shop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.current_page = "shop"
-            await self.update_embed(interaction)
+
+            shop_embed = discord.Embed(
+                title="🪦 Лавка осколков душ",
+                description=(
+                    f"🪙 **{format_number(season_points)}** осколков\n\n"
+                    "Выбери товар ниже и подтверди покупку в модальном окне ↓"
+                ),
+                color=0x2E1A47
+            )
+            shop_embed.add_field(
+                name="Доступные дары",
+                value=(
+                    "⚡ **Удвоитель XP 24ч** — 1200 осколков\n"
+                    "💎 **VIP на 3 дня** — 2500 осколков\n"
+                    "✨ **Premium Pass** — 5000 осколков\n"
+                    "🪙 **5000 MortisCoin** — 3000 осколков"
+                ),
+                inline=False
+            )
+            shop_embed.set_footer(text="Нажми на кнопку товара → подтверди 'подтверждаю'")
+
+            shop_view = SeasonShopView(self.ctx.author.id)
+            await interaction.response.edit_message(embed=shop_embed, view=shop_view)
 
         @discord.ui.button(label="Топ", style=discord.ButtonStyle.grey, emoji="🏆", row=1)
         async def top_button(self, interaction: discord.Interaction, button: discord.ui.Button):
