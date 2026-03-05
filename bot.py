@@ -1486,7 +1486,7 @@ class ShopView(View):
     @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, emoji="✨", custom_id="shop_premium", row=1)
     async def buy_premium(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "premium_pass")
-            
+
     async def _handle_button(self, interaction: discord.Interaction, item_key: str):
         shop_item = SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
@@ -4822,8 +4822,8 @@ async def season(ctx: commands.Context):
 
     # Заглушка для нетестеров
     if not is_tester(ctx.author):
-        dev_progress = 61
-        bar = create_progress_bar(dev_progress, 61, length=20)
+        dev_progress = 80
+        bar = create_progress_bar(dev_progress, 80, length=20)
 
         embed.title = "🪦 Premium Track • В разработке"
         embed.description = (
