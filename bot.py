@@ -1403,18 +1403,24 @@ class ShopView(View):
         await interaction.response.send_modal(modal)
 
 class SeasonShopView(View):
-    def __init__(self, author_id: int):
-        super().__init__(timeout=300)  # 5 минут таймаут
+    def __init__(self, author_id: int, season_menu_view):
+        super().__init__(timeout=300)
         self.author_id = author_id
+        self.season_menu_view = season_menu_view  # ← сохраняем ссылку на основное меню
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """Проверяем, что только автор может взаимодействовать"""
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Это не твоё меню!", ephemeral=True)
             return False
         return True
 
-    # Кнопка обновления баланса (всегда видна)
+    # Кнопка "Назад" — возвращает в основное меню сезона
+    @discord.ui.button(label="Назад в меню", style=discord.ButtonStyle.secondary, emoji="⬅️", row=2)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Возвращаем исходный view и embed основного меню
+        await interaction.response.edit_message(embed=interaction.message.embeds[0], view=self.season_menu_view)
+
+    # Кнопка обновления осколков
     @discord.ui.button(label="Обновить осколки", style=discord.ButtonStyle.grey, emoji="🔄", row=2)
     async def refresh_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
@@ -1424,7 +1430,7 @@ class SeasonShopView(View):
             ephemeral=True
         )
 
-    # Кнопки покупки — все в одном ряду (можно распределить по row=0 и row=1)
+    # Кнопки товаров (без изменений)
     @discord.ui.button(label="Удвоитель XP 24ч", style=discord.ButtonStyle.green, emoji="⚡", row=0)
     async def buy_xp_boost(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "xp_boost_24h")
@@ -1442,11 +1448,9 @@ class SeasonShopView(View):
         await self._buy_item(interaction, "coins_5000")
 
     async def _buy_item(self, interaction: discord.Interaction, item_key: str):
-        """Общая логика покупки для всех товаров"""
         item = SEASON_SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
 
-        # Инициализация данных пользователя, если их нет
         if user_id not in economy_data:
             economy_data[user_id] = {}
         economy_data[user_id].setdefault("season_points", 0)
@@ -1454,7 +1458,6 @@ class SeasonShopView(View):
 
         points = economy_data[user_id]["season_points"]
 
-        # Проверка: уже куплено?
         if item_key in economy_data[user_id]["season_purchases"]:
             await interaction.response.send_message(
                 f"{ECONOMY_EMOJIS['warning']} Ты уже приобрёл **{item['name']}**!",
@@ -1462,7 +1465,6 @@ class SeasonShopView(View):
             )
             return
 
-        # Проверка: хватает ли осколков?
         if points < item["cost"]:
             await interaction.response.send_message(
                 f"{ECONOMY_EMOJIS['error']} Недостаточно осколков!\n"
@@ -1471,7 +1473,6 @@ class SeasonShopView(View):
             )
             return
 
-        # Открываем модалку подтверждения
         modal = SeasonConfirmModal(item_key, item["name"], item["cost"])
         await interaction.response.send_modal(modal)
 
@@ -4892,7 +4893,9 @@ async def season(ctx: commands.Context):
             )
             shop_embed.set_footer(text="Нажми на кнопку товара → подтверди 'подтверждаю'")
 
-            shop_view = SeasonShopView(self.ctx.author.id)
+            # Передаём себя (текущий SeasonMenuView) в SeasonShopView
+            shop_view = SeasonShopView(self.ctx.author.id, self)  # ← вот ключевая строка!
+
             await interaction.response.edit_message(embed=shop_embed, view=shop_view)
 
         @discord.ui.button(label="Топ", style=discord.ButtonStyle.grey, emoji="🏆", row=1)
