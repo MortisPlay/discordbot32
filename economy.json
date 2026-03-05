@@ -1,12 +1,14 @@
 {
   "765476979792150549": {
-    "balance": 927,
-    "last_daily": 1772527267.270752,
+    "balance": 6953,
+    "last_daily": 1772690879.871412,
     "last_message": 0,
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
-    "premium_track_active": false
+    "premium_track_active": false,
+    "season_xp_boost_end": 0,
+    "multiplier_end": 1773295650.140278
   },
   "696486192778182716": {
     "balance": 1000,
@@ -15,9 +17,10 @@
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
-    "premium_track_active": false
+    "premium_track_active": false,
+    "season_xp_boost_end": 0
   },
-  "server_vault": 3295,
+  "server_vault": 6295,
   "1191348523900350566": {
     "balance": 5000,
     "last_daily": 0,
@@ -25,7 +28,8 @@
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
-    "premium_track_active": false
+    "premium_track_active": false,
+    "season_xp_boost_end": 0
   },
   "1401355255912071238": {
     "balance": 89200,
@@ -34,7 +38,8 @@
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
-    "premium_track_active": false
+    "premium_track_active": false,
+    "season_xp_boost_end": 0
   },
   "1034765820464746576": {
     "balance": 5,
@@ -43,7 +48,8 @@
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
-    "premium_track_active": false
+    "premium_track_active": false,
+    "season_xp_boost_end": 0
   },
   "1151691075732381807": {
     "balance": 0,
@@ -52,6 +58,7 @@
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
-    "premium_track_active": false
+    "premium_track_active": false,
+    "season_xp_boost_end": 0
   }
 }
