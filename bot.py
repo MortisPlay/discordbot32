@@ -5000,7 +5000,7 @@ def get_xp_for_level(level: int) -> int:
     amount="На сколько изменить (положительное — добавить, отрицательное — снять)",
     reason="Причина изменения (обязательно)"
 )
-@commands.has_permissions(administrator=True)  # или можно сделать проверку через is_moderator + OWNER_ID
+@commands.check(is_moderator)
 async def admin_coins(ctx: commands.Context, member: discord.Member, amount: int, *, reason: str):
     """Изменение баланса с компенсацией казны сервера"""
 
