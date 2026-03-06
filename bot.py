@@ -1460,13 +1460,16 @@ class SeasonConfirmModal(Modal, title="Подтверждение покупки
 
 class ShopView(View):
     def __init__(self, author_id: int):
-        super().__init__(timeout=300) # 5 минут
+        super().__init__(timeout=300)  # 5 минут
         self.author_id = author_id
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ Это не ваше меню!", ephemeral=True)
             return False
         return True
+
+    # ─── Кнопка обновления баланса ───
     @discord.ui.button(label="Обновить баланс", style=discord.ButtonStyle.grey, emoji="🔄", row=1)
     async def refresh_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = str(interaction.user.id)
@@ -1475,43 +1478,70 @@ class ShopView(View):
             f"💰 Ваш текущий баланс: **{format_number(balance)}** {ECONOMY_EMOJIS['coin']}",
             ephemeral=True
         )
+
+    # ─── Кнопка покупки VIP ───
     @discord.ui.button(label="Купить VIP", style=discord.ButtonStyle.green, emoji="💎", custom_id="shop_vip", row=0)
     async def buy_vip(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "vip")
 
+    # ─── Кнопка покупки ×1.5 ───
     @discord.ui.button(label="Купить ×1.5", style=discord.ButtonStyle.blurple, emoji="🚀", custom_id="shop_multiplier", row=0)
     async def buy_multiplier(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "multiplier")
 
+    # ─── Кнопка покупки Premium Pass ───
     @discord.ui.button(label="Premium Pass", style=discord.ButtonStyle.blurple, emoji="✨", custom_id="shop_premium", row=1)
-    async def buy_premium(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def buy_premium_pass(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "premium_pass")
 
+    # ─── Общая логика обработки нажатия любой кнопки покупки ───
     async def _handle_button(self, interaction: discord.Interaction, item_key: str):
+        if item_key not in SHOP_ITEMS:
+            return await interaction.response.send_message(
+                f"{ECONOMY_EMOJIS['error']} Товар не найден.", ephemeral=True
+            )
+
         shop_item = SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
-        balance = economy_data.get(user_id, {}).get("balance", 0)
-        # Проверка "уже куплено"
+
+        # Получаем или инициализируем данные пользователя
+        if user_id not in economy_data:
+            economy_data[user_id] = {"balance": 0}
+            save_economy()
+
+        balance = economy_data[user_id].get("balance", 0)
+
+        # ─── Проверка "уже куплено" ───
         already_owned = False
+
         if item_key == "vip":
             role = discord.utils.get(interaction.guild.roles, name="VIP")
             already_owned = role in interaction.user.roles if role else False
+
         elif item_key == "multiplier":
-            if "multiplier_end" in economy_data.get(user_id, {}):
+            if "multiplier_end" in economy_data[user_id]:
                 end = economy_data[user_id]["multiplier_end"]
                 already_owned = end > datetime.now(timezone.utc).timestamp()
+
+        elif item_key == "premium_pass":
+            already_owned = economy_data[user_id].get("premium_track_active", False)
+
         if already_owned:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['warning']} У вас уже есть **{shop_item['name']}**!", ephemeral=True
+                f"{ECONOMY_EMOJIS['warning']} У вас уже есть **{shop_item['name']}**!",
+                ephemeral=True
             )
-        # Цена (пока без скидок, потом добавим)
+
+        # ─── Проверка баланса ───
         price = shop_item["price"]
         if balance < price:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно монет! Нужно {format_number(price)}, у вас {format_number(balance)}",
+                f"{ECONOMY_EMOJIS['error']} Недостаточно монет!\n"
+                f"Нужно: **{format_number(price)}**, у вас: **{format_number(balance)}**",
                 ephemeral=True
             )
-        # Модалка подтверждения
+
+        # ─── Открываем модалку подтверждения ───
         modal = ShopConfirmModal(item_key, shop_item["name"], price, price)
         await interaction.response.send_modal(modal)
 
@@ -2315,7 +2345,9 @@ async def on_ready():
     voice_income_task.start()
     voice_season_xp_task.start()
     autosave_seasons_task.start()
-    weekly_premium_bonus.start()  # ← вот сюда
+    weekly_premium_bonus.start()
+    season_reset_checker.start()
+    print("[SEASON] Проверка окончания сезона запущена")
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
 
@@ -4404,70 +4436,89 @@ async def vault(ctx: commands.Context):
 async def balance(ctx: commands.Context, member: discord.Member = None):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
-       
+            return await ctx.send(
+                f"{ECONOMY_EMOJIS['error']} Экономика доступна только на основном сервере.",
+                ephemeral=True
+            )
+
         member = member or ctx.author
         user_id = str(member.id)
-       
+
+        # Инициализация, если пользователя нет
         if user_id not in economy_data:
-            economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
+            economy_data[user_id] = {
+                "balance": 0,
+                "last_daily": 0,
+                "last_message": 0,
+                "investments": []
+            }
             save_economy()
-       
+
+        # Применяем налог на богатство (если применимо)
         tax = await apply_wealth_tax(user_id)
+
         bal = economy_data[user_id]["balance"]
         vault = economy_data.get("server_vault", 0)
-       
+
+        # Место в топе
         users = [(k, v.get("balance", 0)) for k, v in economy_data.items() if k != "server_vault"]
         users.sort(key=lambda x: x[1], reverse=True)
         rank = next((i for i, (uid, _) in enumerate(users, 1) if uid == user_id), len(users) + 1)
-       
+
         now = datetime.now(timezone.utc).timestamp()
-        last = economy_data[user_id].get("last_daily", 0)
-        remaining = DAILY_COOLDOWN - (now - last)
-       
+        last_daily = economy_data[user_id].get("last_daily", 0)
+        remaining = DAILY_COOLDOWN - (now - last_daily)
+
         if remaining <= 0:
-            daily = f"{ECONOMY_EMOJIS['gift']} **Daily доступен!**"
+            daily_status = f"{ECONOMY_EMOJIS['gift']} **Daily доступен!**"
         else:
             hours = int(remaining // 3600)
             minutes = int((remaining % 3600) // 60)
-            progress = (now - last) / DAILY_COOLDOWN
+            progress = (now - last_daily) / DAILY_COOLDOWN
             bar = create_progress_bar(int(progress * 100), 100)
-            daily = f"⏳ До daily: **{hours}ч {minutes}мин**\n`{bar}` **{int(progress * 100)}%**"
-       
+            daily_status = f"⏳ До daily: **{hours}ч {minutes}мин**\n`{bar}` **{int(progress * 100)}%**"
+
         embed = discord.Embed(
             title=f"{get_rank_emoji(bal)} Баланс {member.display_name}",
             color=COLORS["economy"],
             timestamp=datetime.now(timezone.utc)
         )
-       
+
         embed.set_thumbnail(url=member.display_avatar.url)
-       
+
+        # Основные поля
         embed.add_field(
             name=f"{ECONOMY_EMOJIS['balance']} Монеты",
             value=f"**`{format_number(bal)}`** {ECONOMY_EMOJIS['coin']}",
             inline=True
         )
-        embed.add_field(name="🏆 Место", value=f"**#{rank}** из {len(users)}", inline=True)
         embed.add_field(
-            name=f"{ECONOMY_EMOJIS['bank']} Казна",
+            name="🏆 Место в топе",
+            value=f"**#{rank}** из {len(users)}",
+            inline=True
+        )
+        embed.add_field(
+            name=f"{ECONOMY_EMOJIS['bank']} Казна сервера",
             value=f"`{format_number(vault)}` {ECONOMY_EMOJIS['coin']}",
             inline=True
         )
-       
+
+        # Налог (если был списан)
         if tax > 0:
             embed.add_field(
-                name=f"{ECONOMY_EMOJIS['tax']} Налог",
+                name=f"{ECONOMY_EMOJIS['tax']} Налог на богатство",
                 value=f"Списано **-{format_number(tax)}** {ECONOMY_EMOJIS['coin']}",
                 inline=False
             )
-       
+
+        # Daily статус
         embed.add_field(
             name=f"{ECONOMY_EMOJIS['gift']} Ежедневный бонус",
-            value=daily,
+            value=daily_status,
             inline=False
         )
-       
-        # Новое поле: заработок от войса сегодня
+
+        # Заработок в голосе сегодня
         voice_today = daily_voice_earned.get(user_id, 0)
         voice_progress = f"{format_number(voice_today)} / {VOICE_DAILY_MAX}"
         if voice_today >= VOICE_DAILY_MAX:
@@ -4477,8 +4528,8 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
             value=f"**{voice_progress}** {ECONOMY_EMOJIS['coin']}",
             inline=True
         )
-       
-        # Новое поле: активный буст ×1.5
+
+        # Активный буст ×1.5 (от multiplier)
         if "multiplier_end" in economy_data[user_id]:
             end = economy_data[user_id]["multiplier_end"]
             if end > now:
@@ -4490,21 +4541,42 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
                     value=f"Действует на сообщения и daily\nОсталось: **{remaining_h}ч {remaining_m}мин**",
                     inline=True
                 )
-       
-        inv = economy_data[user_id].get("investments", [])
-        active = sum(1 for i in inv if i["end_time"] > now)
-        if active:
+
+        # Статус Premium Track — вот что ты просил
+        premium_active = economy_data[user_id].get("premium_track_active", False)
+        if premium_active:
             embed.add_field(
-                name=f"{ECONOMY_EMOJIS['investment']} Инвестиции",
-                value=f"Активно: **{active}**",
+                name="✨ Premium Track",
+                value="**Активен** • ×1.5 к сезонному опыту\n+200 MortisCoin каждую неделю\nЭксклюзивные награды на уровнях",
                 inline=False
             )
-       
-        embed.set_footer(text=f"ID: {member.id}", icon_url=bot.user.display_avatar.url)
+        else:
+            embed.add_field(
+                name="✨ Premium Track",
+                value="Не активен • купи в `/shop` за 5000 монет",
+                inline=False
+            )
+
+        # Инвестиции (если есть активные)
+        inv = economy_data[user_id].get("investments", [])
+        active_invest = sum(1 for i in inv if i["end_time"] > now)
+        if active_invest > 0:
+            embed.add_field(
+                name=f"{ECONOMY_EMOJIS['investment']} Активные инвестиции",
+                value=f"**{active_invest}** шт.",
+                inline=True
+            )
+
+        embed.set_footer(
+            text=f"ID: {member.id} • Запросил: {ctx.author.display_name}",
+            icon_url=bot.user.display_avatar.url
+        )
+
         await ctx.send(embed=embed, ephemeral=True)
-   
+
     except Exception as e:
-        await send_error_embed(ctx, str(e))
+        await send_error_embed(ctx, f"Ошибка при проверке баланса: {str(e)}")
+        print(f"[BALANCE ERROR] {e}")
 
 @bot.hybrid_command(name="daily", description="🎁 Ежедневный бонус")
 async def daily(ctx: commands.Context):
@@ -4756,34 +4828,67 @@ async def top(ctx: commands.Context):
 async def shop(ctx: commands.Context):
     try:
         if not has_full_access(ctx.guild.id):
-            return await ctx.send(f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.", ephemeral=True)
+            return await ctx.send(
+                f"{ECONOMY_EMOJIS['error']} Экономика доступна только на основном сервере.",
+                ephemeral=True
+            )
+
         user_id = str(ctx.author.id)
-        balance = economy_data.get(user_id, {}).get("balance", 0)
+
+        # Инициализация данных пользователя, если их нет
+        if user_id not in economy_data:
+            economy_data[user_id] = {"balance": 0}
+            save_economy()
+
+        balance = economy_data[user_id].get("balance", 0)
+
         embed = discord.Embed(
             title="🛒 Магазин MortisPlay",
-            description=f"**Ваш баланс:** {format_number(balance)} {ECONOMY_EMOJIS['coin']}\nВыберите товар ниже",
+            description=(
+                f"**Ваш баланс:** {format_number(balance)} {ECONOMY_EMOJIS['coin']}\n\n"
+                "Выберите товар ниже. Нажмите кнопку → подтвердите покупку в модальном окне."
+            ),
             color=COLORS["economy"]
         )
+
+        # ─── Цикл по всем товарам с проверкой "уже куплено" ───
         for key, item in SHOP_ITEMS.items():
             owned = False
+            owned_text = ""
+
             if key == "vip":
                 role = discord.utils.get(ctx.guild.roles, name="VIP")
                 owned = role in ctx.author.roles if role else False
+                owned_text = "(VIP активна)" if owned else ""
+
             elif key == "multiplier":
                 if "multiplier_end" in economy_data.get(user_id, {}):
                     end = economy_data[user_id]["multiplier_end"]
                     owned = end > datetime.now(timezone.utc).timestamp()
-            status = "✅ Уже куплено" if owned else f"Цена: {format_number(item['price'])} {ECONOMY_EMOJIS['coin']}"
+                owned_text = "(×1.5 активен)" if owned else ""
+
+            elif key == "premium_pass":
+                owned = economy_data.get(user_id, {}).get("premium_track_active", False)
+                owned_text = "(Premium Track активен)" if owned else ""
+
+            status = "✅ Уже куплено" if owned else f"Цена: **{format_number(item['price'])}** {ECONOMY_EMOJIS['coin']}"
+
             embed.add_field(
-                name=f"{item['name']} {'(Куплено)' if owned else ''}",
+                name=f"{item['name']} {owned_text}",
                 value=f"{status}\n{item['description']}",
                 inline=False
             )
-        embed.set_footer(text="Нажмите кнопку → подтвердите в модалке • Баланс обновляется кнопкой внизу")
+
+        embed.set_footer(
+            text="Баланс обновляется кнопкой внизу • Покупка подтверждается в модалке"
+        )
+
         view = ShopView(author_id=ctx.author.id)
         await ctx.send(embed=embed, view=view, ephemeral=True)
+
     except Exception as e:
-        await send_error_embed(ctx, str(e))
+        await send_error_embed(ctx, f"Ошибка в магазине: {str(e)}")
+        print(f"[SHOP ERROR] {e}")
         
 
 @bot.hybrid_command(
@@ -4895,6 +5000,29 @@ async def season(ctx: commands.Context):
                 status = "✨ Premium Track" if has_premium else "🪦 Free Track"
                 embed.add_field(name="Статус", value=status, inline=False)
 
+                # Детальное описание Premium Track
+                if has_premium:
+                    embed.add_field(
+                        name="✨ Premium Track — Активен",
+                        value=(
+                            "• ×1.5 к сезонному опыту (сообщения, голос, daily, задания)\n"
+                            "• +200 MortisCoin каждую неделю (понедельник 00:00 UTC)\n"
+                            "• +500 сезонных осколков сразу после активации\n"
+                            "• Эксклюзивные награды на уровнях 5/10/15/20/25/30\n"
+                            "• Роль **Season Pass Holder** при достижении 30 уровня"
+                        ),
+                        inline=False
+                    )
+                else:
+                    embed.add_field(
+                        name="✨ Premium Track — Не активен",
+                        value=(
+                            "Купи в `/shop` за **5000 MortisCoin**\n"
+                            "Получи ×1.5 к опыту, +500 осколков сразу и много других бонусов!"
+                        ),
+                        inline=False
+                    )
+
             elif self.current_page == "pass":
                 embed.title = "🔥 Premium Track — Элита нежити"
                 embed.description = (
@@ -4957,8 +5085,45 @@ async def season(ctx: commands.Context):
                 )
 
             elif self.current_page == "top":
-                embed.title = "🏆 Топ восставших"
-                embed.description = "Скоро здесь будет топ-10 по уровням и осколкам!"
+                embed.title = "🏆 Топ восставших из мёртвых"
+
+                players = []
+                for uid, data in season_data.items():
+                    level = data.get("season_level", 1)
+                    xp = data.get("season_xp", 0)
+                    points = economy_data.get(uid, {}).get("season_points", 0)
+                    players.append((uid, level, xp, points))
+
+                if not players:
+                    embed.description = "Пока никто не воскрес... Стань первым легендой! 🪦🔥"
+                    embed.color = 0x5865F2
+                else:
+                    players.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+                    text = ""
+                    medals = ["🥇", "🥈", "🥉"]
+
+                    for i, (uid, lvl, xp, pts) in enumerate(players[:10], 1):
+                        try:
+                            user = await bot.fetch_user(int(uid))
+                            name = user.display_name
+                        except:
+                            name = f"ID {uid}"
+
+                        emoji = get_level_emoji(lvl)
+                        medal = medals[i-1] if i <= 3 else f"**{i}.**"
+
+                        text += (
+                            f"{medal} {emoji} **{name}**\n"
+                            f"   Уровень **{lvl}**  •  {format_number(xp)} XP  •  {format_number(pts)} осколков\n\n"
+                        )
+
+                    embed.description = text.strip() or "Топ пуст... Время воскрешаться!"
+                    embed.color = 0xFFD700
+
+                    embed.set_footer(
+                        text=f"Топ-{min(10, len(players))} из {len(players)} участников • Обновлено: сейчас"
+                    )
 
             elif self.current_page == "help":
                 embed.title = "🪦 Путь восставшего"
@@ -5179,7 +5344,56 @@ async def admin_coins(ctx: commands.Context, member: discord.Member, amount: int
     if MOD_LOG_CHANNEL_ID:
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_ch:
-            await log_ch.send(embed=log_embed)    
+            await log_ch.send(embed=log_embed)
+
+# ───────────────────────────────────────────────
+# АВТОМАТИЧЕСКИЙ СБРОС СЕЗОНА (раз в месяц)
+# ───────────────────────────────────────────────
+@tasks.loop(hours=6)  # проверяем каждые 6 часов
+async def season_reset_checker():
+    now = datetime.now(timezone.utc)
+    try:
+        end_date = datetime.strptime(current_season["end_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except Exception as e:
+        print(f"[SEASON RESET] Ошибка парсинга даты окончания сезона: {e}")
+        return
+
+    if now >= end_date:
+        print("[SEASON] Сезон официально закончился! Запускаем сброс...")
+
+        announce_ch = bot.get_channel(WELCOME_CHANNEL_ID)
+        if announce_ch:
+            try:
+                await announce_ch.send(
+                    "🪦 **Сезон 'Восстание из мёртвых' завершён!**\n"
+                    "Спасибо всем, кто участвовал! Скоро анонсируем новый сезон...\n"
+                    "Результаты топа и награды — в ближайшие дни."
+                )
+            except Exception as e:
+                print(f"[SEASON ANNOUNCE] Не удалось отправить сообщение: {e}")
+
+        # Сброс сезонных данных всех игроков
+        for uid in list(season_data.keys()):
+            season_data[uid] = {
+                "season_xp": 0,
+                "season_level": 1,
+                "season_points": 0,
+                "claimed_rewards": []
+            }
+
+        # Можно сбросить и premium_track_active (если не хочешь переносить в новый сезон)
+        # Раскомментируй, если нужно:
+        # for uid in economy_data:
+        #     if uid != "server_vault":
+        #         economy_data[uid]["premium_track_active"] = False
+
+        save_seasons()
+        save_economy()
+
+        print("[SEASON] Сброс завершён. Готов к новому сезону!")
+
+        # Отключаем задачу после выполнения (чтобы не спамило в лог)
+        season_reset_checker.stop()                
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
