@@ -1,8 +1,8 @@
 {
   "765476979792150549": {
-    "balance": 6953,
-    "last_daily": 1772690879.871412,
-    "last_message": 0,
+    "balance": 7028,
+    "last_daily": 1772779580.543714,
+    "last_message": 1772702316.347975,
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
@@ -11,7 +11,7 @@
     "multiplier_end": 1773295650.140278
   },
   "696486192778182716": {
-    "balance": 1000,
+    "balance": 1032,
     "last_daily": 0,
     "last_message": 0,
     "investments": [],
@@ -22,9 +22,9 @@
   },
   "server_vault": 6295,
   "1191348523900350566": {
-    "balance": 5000,
+    "balance": 5046,
     "last_daily": 0,
-    "last_message": 0,
+    "last_message": 1772703495.795295,
     "investments": [],
     "season_points": 0,
     "season_purchases": [],
@@ -60,5 +60,11 @@
     "season_purchases": [],
     "premium_track_active": false,
     "season_xp_boost_end": 0
+  },
+  "761907164649619486": {
+    "balance": 1,
+    "last_daily": 0,
+    "last_message": 1772786985.276408,
+    "investments": []
   }
 }
