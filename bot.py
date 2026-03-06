@@ -90,6 +90,16 @@ SHOP_ITEMS = {
         "type": "premium_pass"                  # ← важный ключ, чтобы отличать от других
     }
 }
+
+# ───────────────────────────────────────────────
+# АКЦИЯ 8 МАРТА
+# ───────────────────────────────────────────────
+MARCH_8_DISCOUNT_START   = datetime(2026, 3, 7, 0, 0, tzinfo=timezone.utc)
+MARCH_8_DISCOUNT_END     = datetime(2026, 3, 10, 0, 0, tzinfo=timezone.utc)  # до 10 марта 00:00
+MARCH_8_DISCOUNT_PERCENT = 20
+MARCH_8_DISCOUNT_ROLE_ID = 1477476358710890629  # ← замени на реальный ID роли, которой даётся скидка
+
+DISCOUNTED_ITEMS = {"vip", "multiplier"}  # какие товары участвуют в скидке
 # ───────────────────────────────────────────────
 # Магазин СЕЗОНА (за season_points)
 # ───────────────────────────────────────────────
@@ -238,6 +248,26 @@ def tester_only(func):
        
         return await func(ctx, *args, **kwargs)
     return wrapper
+
+def is_march8_event_active() -> bool:
+    now = datetime.now(timezone.utc)
+    return MARCH_8_DISCOUNT_START <= now < MARCH_8_DISCOUNT_END
+
+
+def get_discounted_price(original_price: int, item_key: str, member: discord.Member) -> int:
+    if not is_march8_event_active():
+        return original_price
+
+    if item_key not in DISCOUNTED_ITEMS:
+        return original_price
+
+    # Проверяем, есть ли нужная роль
+    has_discount_role = any(role.id == MARCH_8_DISCOUNT_ROLE_ID for role in member.roles)
+    if not has_discount_role:
+        return original_price
+
+    discount = int(original_price * (MARCH_8_DISCOUNT_PERCENT / 100))
+    return original_price - discount
 # ───────────────────────────────────────────────
 # ГЛОБАЛЬНЫЕ ДАННЫЕ
 # ───────────────────────────────────────────────
@@ -1533,7 +1563,7 @@ class ShopView(View):
             )
 
         # ─── Проверка баланса ───
-        price = shop_item["price"]
+        price = get_discounted_price(shop_item["price"], item_key, interaction.user)
         if balance < price:
             return await interaction.response.send_message(
                 f"{ECONOMY_EMOJIS['error']} Недостаточно монет!\n"
@@ -4851,7 +4881,14 @@ async def shop(ctx: commands.Context):
             color=COLORS["economy"]
         )
 
-        # ─── Цикл по всем товарам с проверкой "уже куплено" ───
+        if is_march8_event_active():
+            embed.add_field(
+                name="🎀 Акция 8 марта!",
+                value="Скидка 20% на VIP и ×1.5 буст для обладателей роли <@&MARCH_8_DISCOUNT_ROLE_ID>!\nPremium Pass временно скрыт.",
+                inline=False
+            )
+
+        # ─── Цикл по всем товарам с проверкой "уже куплено" и скидкой ───
         for key, item in SHOP_ITEMS.items():
             owned = False
             owned_text = ""
@@ -4871,17 +4908,23 @@ async def shop(ctx: commands.Context):
                 owned = economy_data.get(user_id, {}).get("premium_track_active", False)
                 owned_text = "(Premium Track активен)" if owned else ""
 
-            status = "✅ Уже куплено" if owned else f"Цена: **{format_number(item['price'])}** {ECONOMY_EMOJIS['coin']}"
+            # ─── Скрываем Premium Pass во время акции ───
+            if key == "premium_pass" and is_march8_event_active():
+                continue  # пропускаем отображение
+
+            # ─── Применяем скидку, если есть условия ───
+            display_price = get_discounted_price(item["price"], key, ctx.author)
+            price_text = f"**{format_number(display_price)}** {ECONOMY_EMOJIS['coin']}"
+            if display_price < item["price"]:
+                price_text += f" ~~{format_number(item['price'])}~~ (-{MARCH_8_DISCOUNT_PERCENT}%)"
+
+            status = "✅ Уже куплено" if owned else f"Цена: {price_text}"
 
             embed.add_field(
                 name=f"{item['name']} {owned_text}",
                 value=f"{status}\n{item['description']}",
                 inline=False
             )
-
-        embed.set_footer(
-            text="Баланс обновляется кнопкой внизу • Покупка подтверждается в модалке"
-        )
 
         view = ShopView(author_id=ctx.author.id)
         await ctx.send(embed=embed, view=view, ephemeral=True)
@@ -4927,8 +4970,8 @@ async def season(ctx: commands.Context):
 
     # Заглушка для нетестеров
     if not is_tester(ctx.author):
-        dev_progress = 80
-        bar = create_progress_bar(dev_progress, 80, length=20)
+        dev_progress = 85
+        bar = create_progress_bar(dev_progress, 85, length=20)
 
         embed.title = "🪦 Premium Track • В разработке"
         embed.description = (
