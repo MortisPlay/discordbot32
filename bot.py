@@ -4871,9 +4871,21 @@ async def shop(ctx: commands.Context):
         )
 
         if is_march8_event_active():
+            # Получаем объект роли
+            discount_role = ctx.guild.get_role(MARCH_8_DISCOUNT_ROLE_ID)
+            
+            if discount_role:
+                role_mention = discount_role.mention
+            else:
+                role_mention = f"**@8 марта (роль с ID {MARCH_8_DISCOUNT_ROLE_ID} не найдена)**"
+
             embed.add_field(
                 name="🎀 Акция 8 марта!",
-                value="Скидка 20% на VIP и ×1.5 буст для обладателей роли <@&MARCH_8_DISCOUNT_ROLE_ID>!\nPremium Pass временно скрыт.",
+                value=(
+                    f"С 7 по 9 марта — скидка **-20%** на VIP и ×1.5 буст\n"
+                    f"для обладателей роли {role_mention}!\n"
+                    "Premium Pass временно скрыт из магазина."
+                ),
                 inline=False
             )
 
