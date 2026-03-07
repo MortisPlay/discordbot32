@@ -280,6 +280,34 @@ temp_roles = {}
 investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
+
+# ───────────────────────────────────────────────
+# СЕЗОННЫЕ УТИЛИТЫ — функции для расчёта уровней
+# ───────────────────────────────────────────────
+
+def get_xp_for_level(level: int) -> int:
+    """
+    Возвращает общее количество XP, необходимое для достижения уровня level.
+    Уровень 1 = 0 XP, уровень 2 = 100×2^1.5 и т.д.
+    """
+    if level <= 1:
+        return 0
+    return int(100 * (level ** 1.5))
+
+
+def get_current_level_and_progress(xp: int) -> tuple[int, int, int]:
+    """
+    Возвращает: (текущий уровень, XP на текущем уровне, XP до следующего уровня)
+    """
+    level = 1
+    while get_xp_for_level(level + 1) <= xp:
+        level += 1
+    level = min(level, 30)
+    xp_current = get_xp_for_level(level)
+    xp_next = get_xp_for_level(level + 1) if level < 30 else xp_current
+    progress = xp - xp_current
+    needed = xp_next - xp_current or 1
+    return level, progress, needed
 # ───────────────────────────────────────────────
 # СЕЗОННЫЕ ДАННЫЕ
 # ───────────────────────────────────────────────
@@ -376,18 +404,49 @@ load_daily_tasks()
 voice_start_time = {} # {user_id: timestamp}
 daily_voice_earned = {} # {user_id: сумма сегодня}
 daily_voice_reset = {} # {user_id: дата последнего ресета}
+import os
+import shutil
+import json
+
 def load_economy():
     global economy_data
-    if os.path.exists(ECONOMY_FILE):
+    
+    file_path = ECONOMY_FILE          # "economy.json"
+    backup_path = file_path + ".bak"  # economy.json.bak
+    
+    loaded = False
+    
+    # 1. Пробуем основной файл
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 10:
         try:
-            with open(ECONOMY_FILE, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 economy_data = json.load(f)
+            loaded = True
+            print("[ECONOMY LOAD] Основной файл успешно загружен")
+        except json.JSONDecodeError as e:
+            print(f"[ECONOMY LOAD] Основной файл повреждён (JSON ошибка): {e}")
         except Exception as e:
-            print(f"Ошибка загрузки economy.json: {e}")
-            economy_data = {"server_vault": 0}
-    else:
+            print(f"[ECONOMY LOAD] Ошибка чтения основного файла: {e}")
+    
+    # 2. Если основной не загрузился — берём бэкап
+    if not loaded and os.path.exists(backup_path):
+        try:
+            with open(backup_path, "r", encoding="utf-8") as f:
+                economy_data = json.load(f)
+            print("[ECONOMY LOAD] Восстановлено из бэкапа economy.json.bak")
+            # Сразу сохраняем восстановленные данные в основной файл
+            save_economy()
+            loaded = True
+        except json.JSONDecodeError as e:
+            print(f"[ECONOMY LOAD] Бэкап тоже повреждён (JSON): {e}")
+        except Exception as e:
+            print(f"[ECONOMY LOAD] Ошибка чтения бэкапа: {e}")
+    
+    # 3. Если ничего не загрузилось — создаём пустую структуру
+    if not loaded:
         economy_data = {"server_vault": 0}
-   
+        print("[ECONOMY LOAD] Создан пустой словарь (ни основной, ни бэкап не загрузились)")
+    
     # ─── Инициализация новых полей для всех пользователей ───
     for user_id in list(economy_data.keys()):
         if user_id == "server_vault":
@@ -405,29 +464,75 @@ def load_economy():
         user_data.setdefault("season_points", 0)
         user_data.setdefault("season_purchases", [])
         user_data.setdefault("premium_track_active", False)
-        user_data.setdefault("season_xp_boost_end", 0)  # ← добавляем это поле (0 = неактивен)
+        user_data.setdefault("season_xp_boost_end", 0)  # 0 = неактивен
         
         # Если investments нет — создаём пустой список
         if "investments" not in user_data:
             user_data["investments"] = []
     
-    print("[ECONOMY] Данные загружены и поля инициализированы")
+    print(f"[ECONOMY] Данные загружены и поля инициализированы ({len(economy_data)-1} игроков)")
+
+
 def save_economy():
-    with open(ECONOMY_FILE, "w", encoding="utf-8") as f:
-        json.dump(economy_data, f, ensure_ascii=False, indent=2)
+    """Атомарное сохранение + бэкап перед перезаписью"""
+    global economy_data
+    if not economy_data:
+        return
+
+    file_path = ECONOMY_FILE
+    backup_path = file_path + ".bak"
+    tmp_path = file_path + ".tmp"
+
+    try:
+        # 1. Делаем бэкап существующего файла (если он есть)
+        if os.path.exists(file_path):
+            shutil.copy2(file_path, backup_path)
+            # print(f"[SAVE] Сделан бэкап → {backup_path}")   # можно закомментировать
+
+        # 2. Пишем во временный файл
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(economy_data, f, ensure_ascii=False, indent=2)
+
+        # 3. Атомарная замена
+        os.replace(tmp_path, file_path)
+        print(f"[SAVE] economy.json сохранён ({len(economy_data)-1} игроков)")
+
+    except Exception as e:
+        print(f"[SAVE CRITICAL] Ошибка сохранения economy.json: {e}")
+        # Последняя попытка — пишем напрямую
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(economy_data, f, ensure_ascii=False, indent=2)
+            print("[SAVE] Спасено прямой записью")
+        except Exception as e2:
+            print(f"[SAVE TOTAL FAIL] Даже прямая запись не удалась: {e2}")
+
+
 def load_faq():
     global faq_data
     if os.path.exists(FAQ_FILE):
         try:
             with open(FAQ_FILE, "r", encoding="utf-8") as f:
                 faq_data = json.load(f)
-        except:
+            print(f"[FAQ] Загружено {len(faq_data)} категорий")
+        except Exception as e:
+            print(f"[FAQ LOAD] Ошибка: {e}")
             faq_data = {}
     else:
         faq_data = {}
+        print("[FAQ] Файл не найден → создан пустой")
+
+
 def save_faq():
-    with open(FAQ_FILE, "w", encoding="utf-8") as f:
-        json.dump(faq_data, f, ensure_ascii=False, indent=2)
+    try:
+        with open(FAQ_FILE, "w", encoding="utf-8") as f:
+            json.dump(faq_data, f, ensure_ascii=False, indent=2)
+        # print("[SAVE] faq.json сохранён")   # можно включить при отладке
+    except Exception as e:
+        print(f"[SAVE FAQ] Ошибка сохранения faq.json: {e}")
+
+
+# Вызов загрузки (оставляем как было)
 load_economy()
 load_faq()
 if "server_vault" not in economy_data:
@@ -1407,31 +1512,50 @@ class SeasonConfirmModal(Modal, title="Подтверждение покупки
             return await interaction.response.send_message("❌ Покупка отменена.", ephemeral=True)
 
         user_id = str(interaction.user.id)
-        item = SEASON_SHOP_ITEMS[self.item_key]
 
-        # Финальная проверка баланса сезонных очков
-        if economy_data[user_id]["season_points"] < self.price:
+        # Защита: если пользователя вообще нет в базе — создаём
+        if user_id not in economy_data:
+            economy_data[user_id] = {
+                "balance": 0,
+                "season_points": 0,
+                "season_purchases": [],
+                "premium_track_active": False
+            }
+            save_economy()
+
+        # АТОМАРНАЯ проверка season_points (самое важное!)
+        current_points = economy_data[user_id].get("season_points", 0)
+        if current_points < self.price:
             return await interaction.response.send_message(
-                f"{ECONOMY_EMOJIS['error']} Недостаточно очков! (изменилось за время ожидания)",
+                f"{ECONOMY_EMOJIS['error']} Недостаточно сезонных очков!\n"
+                f"Нужно: **{format_number(self.price)}**, у вас: **{format_number(current_points)}**",
                 ephemeral=True
             )
 
-        # Списание очков
-        economy_data[user_id]["season_points"] -= self.price
-        economy_data[user_id].setdefault("season_purchases", []).append(self.item_key)
+        item = SEASON_SHOP_ITEMS[self.item_key]
+
+        # Списание очков (уже безопасно, т.к. проверили выше)
+        economy_data[user_id]["season_points"] = current_points - self.price
+
+        # Добавляем в историю покупок (если ещё не было)
+        purchases = economy_data[user_id].setdefault("season_purchases", [])
+        if self.item_key not in purchases:  # ← дополнительная защита от дублирования
+            purchases.append(self.item_key)
+
+        msg = ""
+        save_needed = False
 
         # ─── Выдача награды в зависимости от типа ───
-        msg = ""
         if item["type"] == "coins":
-            economy_data[user_id]["balance"] += item["amount"]
+            economy_data[user_id]["balance"] = economy_data[user_id].get("balance", 0) + item["amount"]
             msg = f"✅ Получено **+{format_number(item['amount'])}** MortisCoin!"
-            save_economy()
+            save_needed = True
 
         elif item["type"] == "boost":
             now = datetime.now(timezone.utc).timestamp()
-            duration_sec = item["duration_hours"] * 3600  # 24 часа
+            duration_sec = item["duration_hours"] * 3600
             economy_data[user_id]["season_xp_boost_end"] = now + duration_sec
-            save_economy()
+            save_needed = True
             
             remaining_h = item["duration_hours"]
             msg = (
@@ -1458,9 +1582,17 @@ class SeasonConfirmModal(Modal, title="Подтверждение покупки
 
         elif item["type"] == "pass":
             # ─── АКТИВАЦИЯ PREMIUM PASS ───
+            if economy_data[user_id].get("premium_track_active", False):
+                # Дополнительная проверка на случай race condition
+                await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['warning']} Premium Track уже активирован!",
+                    ephemeral=True
+                )
+                return  # ← выходим, не списываем повторно
+
             economy_data[user_id]["premium_track_active"] = True
             economy_data[user_id]["season_points"] += 500  # +500 очков сразу
-            save_economy()
+            save_needed = True
 
             msg = (
                 "✨ **Premium Pass успешно активирован!**\n\n"
@@ -1472,19 +1604,24 @@ class SeasonConfirmModal(Modal, title="Подтверждение покупки
                 "• Роль **Season Pass Holder** при достижении 30 уровня"
             )
 
+        # Сохраняем только если что-то изменилось
+        if save_needed:
+            save_economy()
+
         await interaction.response.send_message(msg, ephemeral=True)
 
-        # Лог покупки в мод-канал
-        await send_mod_log(
-            title="🛒 Покупка в магазине сезона",
-            description=f"**{interaction.user.mention}** купил **{self.item_name}** за {format_number(self.price)} сезонных очков",
-            color=COLORS["economy"]
+        # Лог покупки (один раз, без дублирования)
+        log_desc = (
+            f"**Пользователь:** {interaction.user.mention}\n"
+            f"**Товар:** {self.item_name}\n"
+            f"**Цена:** {format_number(self.price)} сезонных очков"
         )
+        if item["type"] == "pass":
+            log_desc += "\n**Получено:** +500 сезонных очков"
 
-        # Лог покупки
         await send_mod_log(
             title="🛒 Покупка в магазине сезона",
-            description=f"**Пользователь:** {interaction.user.mention}\n**Товар:** {self.item_name}\n**Цена:** {format_number(self.price)} сезонных очков",
+            description=log_desc,
             color=COLORS["economy"]
         )
 
@@ -1579,7 +1716,7 @@ class SeasonShopView(View):
     def __init__(self, author_id: int, season_menu_view):
         super().__init__(timeout=300)
         self.author_id = author_id
-        self.season_menu_view = season_menu_view  # ← сохраняем ссылку на основное меню
+        self.season_menu_view = season_menu_view  # сохраняем ссылку на основное меню
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -1590,7 +1727,6 @@ class SeasonShopView(View):
     # Кнопка "Назад" — возвращает в основное меню сезона
     @discord.ui.button(label="Назад в меню", style=discord.ButtonStyle.secondary, emoji="⬅️", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Возвращаем исходный view и embed основного меню
         await interaction.response.edit_message(embed=interaction.message.embeds[0], view=self.season_menu_view)
 
     # Кнопка обновления осколков
@@ -1603,7 +1739,7 @@ class SeasonShopView(View):
             ephemeral=True
         )
 
-    # Кнопки товаров (без изменений)
+    # Кнопки товаров
     @discord.ui.button(label="Удвоитель XP 24ч", style=discord.ButtonStyle.green, emoji="⚡", row=0)
     async def buy_xp_boost(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._buy_item(interaction, "xp_boost_24h")
@@ -1624,20 +1760,42 @@ class SeasonShopView(View):
         item = SEASON_SHOP_ITEMS[item_key]
         user_id = str(interaction.user.id)
 
+        # Инициализация пользователя, если его нет
         if user_id not in economy_data:
-            economy_data[user_id] = {}
+            economy_data[user_id] = {
+                "season_points": 0,
+                "season_purchases": [],
+                "premium_track_active": False,
+                "balance": 0  # на всякий случай
+            }
+            save_economy()
+
+        # Безопасные дефолты
         economy_data[user_id].setdefault("season_points", 0)
         economy_data[user_id].setdefault("season_purchases", [])
+        economy_data[user_id].setdefault("premium_track_active", False)
 
         points = economy_data[user_id]["season_points"]
 
-        if item_key in economy_data[user_id]["season_purchases"]:
+        # ─── Специальная защита для Premium Pass ───
+        if item_key == "premium_pass":
+            if economy_data[user_id].get("premium_track_active", False):
+                await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['warning']} Premium Track уже активирован в этом сезоне!\n"
+                    f"Повторная покупка невозможна.",
+                    ephemeral=True
+                )
+                return
+
+        # ─── Проверка на уже купленные одноразовые предметы ───
+        elif item_key in economy_data[user_id]["season_purchases"]:
             await interaction.response.send_message(
                 f"{ECONOMY_EMOJIS['warning']} Ты уже приобрёл **{item['name']}**!",
                 ephemeral=True
             )
             return
 
+        # Проверка баланса осколков
         if points < item["cost"]:
             await interaction.response.send_message(
                 f"{ECONOMY_EMOJIS['error']} Недостаточно осколков!\n"
@@ -1646,6 +1804,7 @@ class SeasonShopView(View):
             )
             return
 
+        # Открываем модалку подтверждения
         modal = SeasonConfirmModal(item_key, item["name"], item["cost"])
         await interaction.response.send_modal(modal)
 
@@ -2019,7 +2178,7 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
 # ───────────────────────────────────────────────
 # ФОНОВЫЕ ЗАДАЧИ
 # ───────────────────────────────────────────────
-@tasks.loop(seconds=300)
+@tasks.loop(seconds=60)
 async def autosave_economy_task():
     save_economy()
     print("[AUTO] Экономика сохранена")
@@ -2285,13 +2444,12 @@ async def voice_season_xp_task():
                         except:
                             pass  # ЛС закрыты — ничего страшного
 
-@tasks.loop(hours=168)  # каждые 7 дней = 1 неделя
+@tasks.loop(hours=6)  # проверяем каждые 6 часов
 async def weekly_premium_bonus():
     now = datetime.now(timezone.utc)
     
-    # Запускаем ТОЛЬКО если сейчас понедельник 00:00–00:29 UTC
-    # (запас на возможную небольшую задержку запуска задачи)
-    if now.weekday() != 0 or now.hour != 0:
+    # Выдаём бонус только в понедельник между 00:00 и 05:59 UTC
+    if now.weekday() != 0 or now.hour >= 6:
         return
 
     count = 0
@@ -2309,23 +2467,16 @@ async def weekly_premium_bonus():
             if user:
                 await user.send(embed=discord.Embed(
                     title="✨ Еженедельный Premium-бонус",
-                    description=(
-                        "+**200** MortisCoin\n\n"
-                        "Спасибо, что остаёшься с нами на Premium Track! 🚀\n"
-                        "Следующий бонус — через 7 дней."
-                    ),
+                    description="+**200** MortisCoin\n\nСпасибо, что остаёшься с нами на Premium Track! 🚀",
                     color=0xFFD700,
                     timestamp=now
-                ).set_thumbnail(url=user.display_avatar.url)
-                 .set_footer(text="MortisPlay • Каждое воскресенье → понедельник 00:00 UTC"))
-        except Exception as e:
-            print(f"[WEEKLY BONUS DM] Не удалось отправить ЛС {user_id}: {e}")
+                ).set_thumbnail(url=user.display_avatar.url))
+        except:
+            pass
 
     if count > 0:
         save_economy()
         print(f"[WEEKLY PREMIUM] Выдано +200 монет {count} Premium-игрокам")
-    else:
-        print("[WEEKLY PREMIUM] Нет активных Premium-игроков")
 # ───────────────────────────────────────────────
 # СОБЫТИЯ
 # ───────────────────────────────────────────────
@@ -5485,7 +5636,20 @@ async def season_reset_checker():
         print("[SEASON] Сброс завершён. Готов к новому сезону!")
 
         # Отключаем задачу после выполнения (чтобы не спамило в лог)
-        season_reset_checker.stop()                
+        season_reset_checker.stop()
+
+import atexit
+
+def shutdown_save():
+    print("[SHUTDOWN] Финальное сохранение всех данных...")
+    save_economy()
+    save_seasons()
+    save_daily_tasks()
+    save_warnings()
+    save_cases()
+    print("[SHUTDOWN] Данные сохранены.")
+
+atexit.register(shutdown_save)                        
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
