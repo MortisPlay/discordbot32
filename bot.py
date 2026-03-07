@@ -4883,14 +4883,18 @@ async def shop(ctx: commands.Context):
                 name="🎀 Акция 8 марта!",
                 value=(
                     f"С 7 по 9 марта — скидка **-20%** на VIP и ×1.5 буст\n"
-                    f"для обладателей роли {role_mention}!\n"
-                    "Premium Pass временно скрыт из магазина."
+                    f"для обладателей роли {role_mention}!\n\n"
+                    "**Premium Pass временно недоступен** (скрыт из магазина на время акции)."
                 ),
                 inline=False
             )
 
         # ─── Цикл по всем товарам с проверкой "уже куплено" и скидкой ───
         for key, item in SHOP_ITEMS.items():
+            # Полностью скрываем Premium Pass во время акции
+            if key == "premium_pass" and is_march8_event_active():
+                continue
+
             owned = False
             owned_text = ""
 
@@ -4909,11 +4913,7 @@ async def shop(ctx: commands.Context):
                 owned = economy_data.get(user_id, {}).get("premium_track_active", False)
                 owned_text = "(Premium Track активен)" if owned else ""
 
-            # ─── Скрываем Premium Pass во время акции ───
-            if key == "premium_pass" and is_march8_event_active():
-                continue  # пропускаем отображение
-
-            # ─── Применяем скидку, если есть условия ───
+            # Применяем скидку, если есть условия
             display_price = get_discounted_price(item["price"], key, ctx.author)
             price_text = f"**{format_number(display_price)}** {ECONOMY_EMOJIS['coin']}"
             if display_price < item["price"]:
