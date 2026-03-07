@@ -2214,9 +2214,13 @@ async def voice_season_xp_task():
                 
                 xp_per_min = current_season["xp_per_voice_minute"]
                 if is_vip(member):
-                    xp_per_min *= 2
+                 xp_per_min *= 2
+
+                xp_base = int(xp_per_min * 5)  # за 5 минут
+
+                # Применяем все множители
+                xp_to_add = apply_season_xp_multipliers(user_id, xp_base, now)
                 
-                xp_to_add = int(xp_per_min * 5)
                 
                 if economy_data.get(user_id, {}).get("premium_track_active", False):
                     xp_to_add = int(xp_to_add * 1.5)
@@ -2367,6 +2371,36 @@ async def on_ready():
     print("[SEASON] Проверка окончания сезона запущена")
     bot.launch_time = datetime.now(timezone.utc)
     print("Бот полностью готов к работе")
+
+# ───────────────────────────────────────────────
+# УНИВЕРСАЛЬНАЯ ФУНКЦИЯ МНОЖИТЕЛЕЙ СЕЗОННОГО XP
+# ───────────────────────────────────────────────
+def apply_season_xp_multipliers(user_id: str, base_xp: int, now: float = None) -> int:
+    """
+    Применяет все существующие множители к базовому XP в правильном порядке:
+    1. VIP ×2 (если хочешь оставить)
+    2. Premium Track ×1.5
+    3. Удвоитель 24ч ×2 (самый сильный, применяется последним)
+    """
+    if now is None:
+        now = datetime.now(timezone.utc).timestamp()
+
+    xp = base_xp
+
+    # 1. VIP ×2 — обычно влияет только на монеты, но если хочешь — оставь
+    # member = bot.get_guild(FULL_ACCESS_GUILD_ID).get_member(int(user_id))
+    # if member and is_vip(member):
+    #     xp = int(xp * 2)
+
+    # 2. Premium Track ×1.5
+    if economy_data.get(user_id, {}).get("premium_track_active", False):
+        xp = int(xp * 1.5)
+
+    # 3. Удвоитель XP 24ч ×2 (самый последний множитель)
+    if economy_data.get(user_id, {}).get("season_xp_boost_end", 0) > now:
+        xp = int(xp * 2)
+
+    return xp
 
 @bot.event
 async def on_message(message):
@@ -2566,7 +2600,7 @@ async def on_message(message):
         await check_auto_punishment(message.author, reason)
         return
 
-        # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
+    # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
     if has_full_access(message.guild.id) or message.author.id == OWNER_ID:
         # Инициализация
         if user_id not in economy_data:
@@ -2584,34 +2618,22 @@ async def on_message(message):
             economy_data[user_id]["balance"] += earn_coins
             economy_data[user_id]["last_message"] = now
 
-            # Сезонный XP
-            xp_per_msg = current_season["xp_per_message"]
-            
-            # VIP ×2
-            if is_vip(message.author):
-                xp_per_msg = int(xp_per_msg * 2)
-            
-            # Premium Pass +50%
-            if economy_data[user_id].get("premium_track_active", False):
-                xp_per_msg = int(xp_per_msg * 1.5)
-            
-            # Удвоитель XP 24ч ×2 (самый последний множитель)
-            now_ts = datetime.now(timezone.utc).timestamp()
-            if economy_data[user_id].get("season_xp_boost_end", 0) > now_ts:
-                xp_per_msg = int(xp_per_msg * 2)
-                # Можно добавить эмодзи в лог или сообщение, если хочешь
-                # print(f"[XP BOOST] ×2 применён для {user_id}")
+            # Сезонный XP — теперь через универсальную функцию
+            base_xp = current_season["xp_per_message"]
+
+            # Применяем все множители в правильном порядке
+            xp_to_add = apply_season_xp_multipliers(user_id, base_xp)
 
             today_str = datetime.now(timezone.utc).date().isoformat()
             if daily_season_xp_reset.get(user_id) != today_str:
                 daily_season_xp_earned[user_id] = 0
                 daily_season_xp_reset[user_id] = today_str
 
-            can_add_xp = daily_season_xp_earned[user_id] + xp_per_msg <= current_season["max_daily_xp"]
+            can_add_xp = daily_season_xp_earned[user_id] + xp_to_add <= current_season["max_daily_xp"]
             if can_add_xp:
-                season_data[user_id]["season_xp"] += xp_per_msg
+                season_data[user_id]["season_xp"] += xp_to_add
                 await check_and_level_up(user_id, message.author)
-                daily_season_xp_earned[user_id] += xp_per_msg
+                daily_season_xp_earned[user_id] += xp_to_add
 
                 # Прогресс ежедневного задания "messages"
                 prog = daily_tasks_progress.setdefault(user_id, {
@@ -2632,7 +2654,7 @@ async def on_message(message):
                         f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
                         delete_after=10
                     )
-                    print(f"[XP SUCCESS] +{xp_per_msg} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
+                    print(f"[XP SUCCESS] +{xp_to_add} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
 
             save_economy()
             save_seasons()
@@ -4681,7 +4703,7 @@ async def daily(ctx: commands.Context):
         economy_data[user_id]["last_daily"] = now
         save_economy()
 
-        # Создаём основной embed один раз
+        # Создаём основной embed
         embed = discord.Embed(
             title=title,
             description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
@@ -4690,7 +4712,6 @@ async def daily(ctx: commands.Context):
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
-        # Супер-дроп или обычная информация
         if is_super_drop:
             embed.add_field(
                 name="🎉 СУПЕР-ДРОП!",
@@ -4700,7 +4721,6 @@ async def daily(ctx: commands.Context):
         else:
             embed.add_field(name="📊 Детали", value=rarity_text, inline=True)
 
-        # Стрик
         if bonus > 0:
             embed.add_field(
                 name="🔥 Стрик",
@@ -4708,7 +4728,6 @@ async def daily(ctx: commands.Context):
                 inline=True
             )
 
-        # Premium бонус
         if premium_bonus > 0:
             embed.add_field(
                 name="✨ Premium Daily Bonus",
@@ -4716,7 +4735,6 @@ async def daily(ctx: commands.Context):
                 inline=True
             )
 
-        # Налог
         if tax > 0:
             embed.add_field(
                 name=f"{ECONOMY_EMOJIS['tax']} Налог",
@@ -4725,20 +4743,18 @@ async def daily(ctx: commands.Context):
             )
 
         # ─── Сезонный XP за daily ───
-        daily_xp = current_season["daily_xp_bonus"]
-        if is_vip(ctx.author):
-            daily_xp = int(daily_xp * 2)
+        base_xp = current_season["daily_xp_bonus"]
 
-        # +50% к XP для Premium Pass
-        if economy_data[user_id].get("premium_track_active", False):
-            daily_xp = int(daily_xp * 1.5)
+        # Применяем все множители через универсальную функцию
+        xp_to_add = apply_season_xp_multipliers(user_id, base_xp)
 
+        # Проверка дневного лимита сезонного XP
         if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
             daily_season_xp_earned[user_id] = 0
             daily_season_xp_reset[user_id] = today_str
 
         remaining_xp = current_season["max_daily_xp"] - daily_season_xp_earned.get(user_id, 0)
-        xp_to_add = min(daily_xp, remaining_xp)
+        xp_to_add = min(xp_to_add, remaining_xp)
 
         if xp_to_add > 0:
             season_data[user_id]["season_xp"] += xp_to_add
@@ -4778,7 +4794,7 @@ async def daily(ctx: commands.Context):
                     text=f"Баланс: {format_number(economy_data[user_id]['balance'])} • Почти достигнут лимит XP!"
                 )
 
-        # Финальный футер (если не переопределён выше)
+        # Финальный футер
         if not embed.footer.text:
             embed.set_footer(
                 text=f"Баланс: {format_number(economy_data[user_id]['balance'])} {ECONOMY_EMOJIS['coin']}"
@@ -4955,6 +4971,7 @@ async def season(ctx: commands.Context):
     economy_data[user_id].setdefault("season_points", 0)
     economy_data[user_id].setdefault("season_purchases", [])
     economy_data[user_id].setdefault("premium_track_active", False)
+    economy_data[user_id].setdefault("season_xp_boost_end", 0)
 
     # Безопасные переменные
     season_player    = season_data.get(user_id, {})
@@ -4963,9 +4980,13 @@ async def season(ctx: commands.Context):
     season_points    = economy_data.get(user_id, {}).get("season_points", 0)
     has_premium      = economy_data.get(user_id, {}).get("premium_track_active", False)
 
+    now_ts = datetime.now(timezone.utc).timestamp()
+    has_xp_boost     = economy_data[user_id]["season_xp_boost_end"] > now_ts
+
     # Цвета
     BASE_COLOR    = 0x2E1A47
     PREMIUM_COLOR = 0xFF2D55
+    BOOST_COLOR   = 0xFFAA00   # оранжевый для буста
 
     embed = discord.Embed(color=PREMIUM_COLOR if has_premium else BASE_COLOR)
 
@@ -5011,6 +5032,7 @@ async def season(ctx: commands.Context):
             embed.clear_fields()
             embed.title = ""
             embed.description = ""
+            embed.color = PREMIUM_COLOR if has_premium else BASE_COLOR
 
             embed.set_thumbnail(url=self.ctx.author.display_avatar.url)
             embed.set_footer(text=f"MortisPlay • Сезон • {datetime.now(timezone.utc).strftime('%d.%m.%Y')}")
@@ -5022,10 +5044,10 @@ async def season(ctx: commands.Context):
                 lvl = min(lvl, 30)
 
                 xp_current = get_xp_for_level(lvl)
-                xp_next = get_xp_for_level(lvl + 1) if lvl < 30 else xp_current
+                xp_next    = get_xp_for_level(lvl + 1) if lvl < 30 else xp_current
                 progress_xp = season_xp - xp_current
-                needed = xp_next - xp_current or 1
-                percent = min(100, int((progress_xp / needed) * 100))
+                needed      = xp_next - xp_current or 1
+                percent     = min(100, int((progress_xp / needed) * 100))
 
                 bar = create_progress_bar(progress_xp, needed, length=20)
                 emoji = get_level_emoji(lvl)
@@ -5037,12 +5059,37 @@ async def season(ctx: commands.Context):
                 )
 
                 embed.add_field(name="🩸 Уровень", value=f"**{lvl}** → **{lvl + 1 if lvl < 30 else 'MAX'}**", inline=True)
-                embed.add_field(name="🔥 Опыт", value=f"**{format_number(season_xp)}** / **{format_number(xp_next)}**", inline=True)
-                embed.add_field(name="Прогресс", value=f"`{bar}` **{percent}%**", inline=False)
+                embed.add_field(name="🔥 Опыт",    value=f"**{format_number(season_xp)}** / **{format_number(xp_next)}**", inline=True)
+                embed.add_field(name="Прогресс",   value=f"`{bar}` **{percent}%**", inline=False)
+
                 embed.add_field(name="🪙 Осколки", value=f"**{format_number(season_points)}**", inline=True)
 
                 status = "✨ Premium Track" if has_premium else "🪦 Free Track"
                 embed.add_field(name="Статус", value=status, inline=False)
+
+                now = datetime.now(timezone.utc).timestamp()
+                if economy_data.get(user_id, {}).get("season_xp_boost_end", 0) > now:
+                 remaining_sec = int(economy_data[user_id]["season_xp_boost_end"] - now)
+                 h = remaining_sec // 3600
+                 m = (remaining_sec % 3600) // 60
+                 embed.add_field(
+                    name="⚡ Активный удвоитель опыта",
+                    value=f"×2 ко всему сезонному XP\nОсталось: **{h}ч {m}мин** (<t:{int(economy_data[user_id]['season_xp_boost_end'])}:R>)",
+                    inline=False
+            )
+
+                # Показываем активный удвоитель XP 24ч
+                if has_xp_boost:
+                    remaining_sec = int(economy_data[user_id]["season_xp_boost_end"] - now_ts)
+                    h = remaining_sec // 3600
+                    m = (remaining_sec % 3600) // 60
+                    embed.add_field(
+                        name="⚡ Активный удвоитель опыта",
+                        value=f"×2 ко всему сезонному XP\nОсталось: **{h}ч {m}мин** (<t:{int(economy_data[user_id]['season_xp_boost_end'])}:R>)",
+                        inline=False
+                    )
+                    # Можно сделать цвет embed более ярким, если буст активен
+                    embed.color = BOOST_COLOR
 
                 # Детальное описание Premium Track
                 if has_premium:
@@ -5067,6 +5114,7 @@ async def season(ctx: commands.Context):
                         inline=False
                     )
 
+            # ─── остальные страницы без изменений ───
             elif self.current_page == "pass":
                 embed.title = "🔥 Premium Track — Элита нежити"
                 embed.description = (
@@ -5186,7 +5234,7 @@ async def season(ctx: commands.Context):
             elif interaction:
                 await interaction.response.edit_message(embed=embed, view=self)
 
-        # Кнопки навигации
+        # Кнопки навигации (без изменений)
         @discord.ui.button(label="Инфо", style=discord.ButtonStyle.primary, emoji="📊", row=0)
         async def info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
             self.current_page = "info"
