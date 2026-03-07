@@ -5157,13 +5157,13 @@ async def season(ctx: commands.Context):
 
     # Заглушка для нетестеров
     if not is_tester(ctx.author):
-        dev_progress = 85
-        bar = create_progress_bar(dev_progress, 85, length=20)
+        dev_progress = 100
+        bar = create_progress_bar(dev_progress, 100, length=20)
 
-        embed.title = "🪦 Premium Track • В разработке"
+        embed.title = "🪦 Premium Track • РАЗРАБОТКА ЗАВЕРШЕНА!"
         embed.description = (
             f"**{ctx.author.mention}**, элита уже восстала из мёртвых... 🔥\n"
-            "Скоро Premium Track откроется **всем** участникам сервера!\n"
+            "Уже 10 марта Premium Track откроется **всем** участникам сервера!\n"
             "Будет мощно — следи за анонсами."
         )
         embed.add_field(
