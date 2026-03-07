@@ -2001,8 +2001,8 @@ async def check_and_level_up(user_id: str, member: discord.Member = None):
     except Exception as e:
         print(f"[LEVEL-UP DM] Ошибка для {user_id}: {type(e).__name__}: {e}")
 
-    # ─── Публичное объявление (если есть member) ───
-    if member and member.guild:
+        # ─── Публичное объявление (только для обычных игроков) ───
+    if member and member.guild and not is_tester(member):
         try:
             channel = (
                 member.guild.system_channel or
@@ -2186,7 +2186,7 @@ async def voice_income_task():
                     # Сохраняем сразу после начисления
                     save_economy()
 
-@tasks.loop(minutes=5)  # каждые 5 минут проверяем и начисляем XP
+@tasks.loop(minutes=5)
 async def voice_season_xp_task():
     now = datetime.now(timezone.utc).timestamp()
    
@@ -2197,8 +2197,7 @@ async def voice_season_xp_task():
             
             active_members = [
                 m for m in vc.members
-                if not m.bot
-                and not (m.voice.mute or m.voice.self_mute or m.voice.self_deaf or m.voice.deaf)
+                if not m.bot and not (m.voice.mute or m.voice.self_mute or m.voice.self_deaf or m.voice.deaf)
             ]
             
             if len(active_members) < 2:
@@ -2206,66 +2205,55 @@ async def voice_season_xp_task():
             
             for member in active_members:
                 user_id = str(member.id)
-               
-                # Пропускаем, если не заходил в голос (нет таймера)
                 if user_id not in voice_start_time:
                     continue
                 
-                # Сколько минут прошло с последнего входа
                 minutes_in_voice = (now - voice_start_time[user_id]) / 60
-                
-                # Начисляем только за полные минуты
                 if minutes_in_voice < 1:
                     continue
                 
-                # Базовое значение XP за минуту
                 xp_per_min = current_season["xp_per_voice_minute"]
-                
-                # VIP ×2
                 if is_vip(member):
                     xp_per_min *= 2
                 
-                # За 5 минут начисляем примерно это количество
                 xp_to_add = int(xp_per_min * 5)
                 
-                # Premium Pass +50%
                 if economy_data.get(user_id, {}).get("premium_track_active", False):
                     xp_to_add = int(xp_to_add * 1.5)
-                
-                # Удвоитель XP 24ч ×2 (самый последний множитель)
-                now_ts = datetime.now(timezone.utc).timestamp()
-                if economy_data.get(user_id, {}).get("season_xp_boost_end", 0) > now_ts:
+                if economy_data.get(user_id, {}).get("season_xp_boost_end", 0) > now:
                     xp_to_add = int(xp_to_add * 2)
                 
-                # Проверка дневного лимита сезонного XP
                 today_str = datetime.now(timezone.utc).date().isoformat()
                 if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
                     daily_season_xp_earned[user_id] = 0
                     daily_season_xp_reset[user_id] = today_str
                 
                 remaining_xp = current_season["max_daily_xp"] - daily_season_xp_earned.get(user_id, 0)
-                if xp_to_add > remaining_xp:
-                    xp_to_add = max(0, remaining_xp)
+                xp_to_add = min(xp_to_add, remaining_xp)
                 
                 if xp_to_add > 0:
-                    # Начисляем
                     season_data[user_id]["season_xp"] += xp_to_add
                     await check_and_level_up(user_id, member)
                     daily_season_xp_earned[user_id] += xp_to_add
                     
-                    # Прогресс голосового задания
+                    # Прогресс задания
                     prog = daily_tasks_progress.setdefault(user_id, {
-                        "messages": 0, "voice": 0, "daily": 0, "date": today_str
+                        "messages": 0, "voice": 0, "daily": 0, 
+                        "voice_reward_given": False, "date": today_str
                     })
                     if prog["date"] != today_str:
-                        prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
+                        prog.update({"messages": 0, "voice": 0, "daily": 0, "voice_reward_given": False, "date": today_str})
                         daily_tasks_progress[user_id] = prog
 
-                    prog["voice"] += 5  # начисляем за каждые 5 минут
-                    if prog["voice"] >= DAILY_TASKS["voice"]["goal"]:
+                    prog["voice"] += 5
+                    
+                    # Выдаём награду ТОЛЬКО ОДИН РАЗ за день
+                    if prog["voice"] >= DAILY_TASKS["voice"]["goal"] and not prog.get("voice_reward_given", False):
                         extra_xp = DAILY_TASKS["voice"]["xp"]
                         season_data[user_id]["season_xp"] += extra_xp
                         await check_and_level_up(user_id, member)
+                        prog["voice_reward_given"] = True
+                        
                         try:
                             await member.send(
                                 f"✓ Выполнено задание **{DAILY_TASKS['voice']['desc']}** → +{extra_xp} XP!"
@@ -2273,7 +2261,6 @@ async def voice_season_xp_task():
                         except:
                             pass
                     
-                    # Сохраняем
                     save_seasons()
                     save_daily_tasks()
                     
@@ -2635,10 +2622,12 @@ async def on_message(message):
                     daily_tasks_progress[user_id] = prog
 
                 prog["messages"] += 1
-                if prog["messages"] >= DAILY_TASKS["messages"]["goal"]:
+                if prog["messages"] >= DAILY_TASKS["messages"]["goal"] and not prog.get("messages_reward_given", False):
                     extra_xp = DAILY_TASKS["messages"]["xp"]
                     season_data[user_id]["season_xp"] += extra_xp
                     await check_and_level_up(user_id, message.author)
+                    prog["messages_reward_given"] = True
+                    
                     await message.channel.send(
                         f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
                         delete_after=10
