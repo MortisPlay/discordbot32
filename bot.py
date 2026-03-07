@@ -61,7 +61,7 @@ INVESTMENT_BASE_RATE = 0.05
 UNAUTHORIZED_CMD_LIMIT = 3
 UNAUTHORIZED_MUTE_MINUTES = 1
 # ───────────────────────────────────────────────
-# НОВЫЕ НАСТРОЙКИ ЭКОНОМИКИ V0.5.0
+# НОВЫЕ НАСТРОЙКИ ЭКОНОМИКИ
 # ───────────────────────────────────────────────
 VOICE_INCOME_PER_30MIN = 8 # Сколько монет за 30 минут в голосе
 VOICE_MIN_SESSION_MINUTES = 10 # Минимальное время сессии
@@ -100,6 +100,12 @@ MARCH_8_DISCOUNT_PERCENT = 20
 MARCH_8_DISCOUNT_ROLE_ID = 1477476358710890629  # ← замени на реальный ID роли, которой даётся скидка
 
 DISCOUNTED_ITEMS = {"vip", "multiplier"}  # какие товары участвуют в скидке
+
+# ───────────────────────────────────────────────
+# СЕЗОННЫЙ ФЛАГ (временно выключен)
+# ───────────────────────────────────────────────
+SEASON_ACTIVE = False          # ← поменяй на True, когда официально откроешь сезон
+SEASON_ANNOUNCE_CHANNEL = WELCOME_CHANNEL_ID  # куда писать анонс открытия
 # ───────────────────────────────────────────────
 # Магазин СЕЗОНА (за season_points)
 # ───────────────────────────────────────────────
@@ -2751,67 +2757,75 @@ async def on_message(message):
         await check_auto_punishment(message.author, reason)
         return
 
-    # ====================== ЭКОНОМИКА + СЕЗОННЫЙ XP (для ВСЕХ) ======================
+    # ───────────────────────────────────────────────
+    # ЭКОНОМИКА + СЕЗОННЫЙ XP — только если сезон активен
+    # ───────────────────────────────────────────────
     if has_full_access(message.guild.id) or message.author.id == OWNER_ID:
-        # Инициализация
+
+        # Инициализация (всегда, даже если сезон выключен)
         if user_id not in economy_data:
             economy_data[user_id] = {"balance": 0, "last_daily": 0, "last_message": 0, "investments": []}
         if user_id not in season_data:
             season_data[user_id] = {"season_xp": 0, "season_level": 1, "season_points": 0, "claimed_rewards": []}
-        if user_id not in daily_season_xp_earned:
-            daily_season_xp_earned[user_id] = 0
-            daily_season_xp_reset[user_id] = datetime.now(timezone.utc).date().isoformat()
 
-        # Начисление за сообщение
+        # Начисление монет за сообщение (независимо от сезона)
         if now - economy_data[user_id].get("last_message", 0) >= MESSAGE_COOLDOWN:
-            # Монеты
             earn_coins = random.randint(1, 5)
             economy_data[user_id]["balance"] += earn_coins
             economy_data[user_id]["last_message"] = now
 
-            # Сезонный XP — теперь через универсальную функцию
-            base_xp = current_season["xp_per_message"]
+            # ─── СЕЗОННЫЙ XP ─── только если сезон включён
+            if SEASON_ACTIVE:
 
-            # Применяем все множители в правильном порядке
-            xp_to_add = apply_season_xp_multipliers(user_id, base_xp)
+                base_xp = current_season["xp_per_message"]
 
-            today_str = datetime.now(timezone.utc).date().isoformat()
-            if daily_season_xp_reset.get(user_id) != today_str:
-                daily_season_xp_earned[user_id] = 0
-                daily_season_xp_reset[user_id] = today_str
+                # Применяем все множители
+                xp_to_add = apply_season_xp_multipliers(user_id, base_xp)
 
-            can_add_xp = daily_season_xp_earned[user_id] + xp_to_add <= current_season["max_daily_xp"]
-            if can_add_xp:
-                season_data[user_id]["season_xp"] += xp_to_add
-                await check_and_level_up(user_id, message.author)
-                daily_season_xp_earned[user_id] += xp_to_add
+                today_str = datetime.now(timezone.utc).date().isoformat()
 
-                # Прогресс ежедневного задания "messages"
-                prog = daily_tasks_progress.setdefault(user_id, {
-                    "messages": 0, "voice": 0, "daily": 0, "date": today_str
-                })
-                if prog["date"] != today_str:
-                    prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
-                    daily_tasks_progress[user_id] = prog
+                # Сброс дневного счётчика, если новый день
+                if user_id not in daily_season_xp_reset or daily_season_xp_reset[user_id] != today_str:
+                    daily_season_xp_earned[user_id] = 0
+                    daily_season_xp_reset[user_id] = today_str
 
-                prog["messages"] += 1
-                if prog["messages"] >= DAILY_TASKS["messages"]["goal"] and not prog.get("messages_reward_given", False):
-                    extra_xp = DAILY_TASKS["messages"]["xp"]
-                    season_data[user_id]["season_xp"] += extra_xp
+                remaining_xp = current_season["max_daily_xp"] - daily_season_xp_earned.get(user_id, 0)
+                xp_to_add = min(xp_to_add, remaining_xp)
+
+                if xp_to_add > 0:
+                    season_data[user_id]["season_xp"] += xp_to_add
                     await check_and_level_up(user_id, message.author)
-                    prog["messages_reward_given"] = True
-                    
-                    await message.channel.send(
-                        f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
-                        delete_after=10
-                    )
-                    print(f"[XP SUCCESS] +{xp_to_add} XP → {user_id} (всего {season_data[user_id]['season_xp']})")
+                    daily_season_xp_earned[user_id] += xp_to_add
 
+                    # Прогресс ежедневного задания "messages"
+                    prog = daily_tasks_progress.setdefault(user_id, {
+                        "messages": 0, "voice": 0, "daily": 0,
+                        "date": today_str
+                    })
+                    if prog["date"] != today_str:
+                        prog.update({"messages": 0, "voice": 0, "daily": 0, "date": today_str})
+                        daily_tasks_progress[user_id] = prog
+
+                    prog["messages"] += 1
+
+                    if prog["messages"] >= DAILY_TASKS["messages"]["goal"] and not prog.get("messages_reward_given", False):
+                        extra_xp = DAILY_TASKS["messages"]["xp"]
+                        season_data[user_id]["season_xp"] += extra_xp
+                        await check_and_level_up(user_id, message.author)
+                        prog["messages_reward_given"] = True
+
+                        await message.channel.send(
+                            f"{message.author.mention} ✓ Задание выполнено: **{DAILY_TASKS['messages']['desc']}** → +{extra_xp} XP!",
+                            delete_after=10
+                        )
+
+            # Сохраняем изменения
             save_economy()
-            save_seasons()
-            save_daily_tasks()
+            if SEASON_ACTIVE:
+                save_seasons()
+                save_daily_tasks()
 
-    # В самом конце обрабатываем команды
+    # Важно: команды обрабатываем в самом конце
     await bot.process_commands(message)
 # ───────────────────────────────────────────────
 # ПРИВЕТСТВИЯ И ПРОЩАНИЯ
