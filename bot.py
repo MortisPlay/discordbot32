@@ -5589,6 +5589,89 @@ async def admin_coins(ctx: commands.Context, member: discord.Member, amount: int
         if log_ch:
             await log_ch.send(embed=log_embed)
 
+@bot.hybrid_command(
+    name="season_reset",
+    description="Полный сброс текущего сезона (только для админов/владельца)"
+)
+@commands.check(lambda ctx: ctx.author.id == OWNER_ID or ctx.author.guild_permissions.administrator)
+@tester_only  # ← опционально, если хочешь оставить только для тестеров
+async def season_reset(ctx: commands.Context):
+    """Полное обнуление сезона — для тестирования перед релизом"""
+    await ctx.defer(ephemeral=True)
+
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send("Команда доступна только на основном сервере.", ephemeral=True)
+
+    # Подтверждение действия (чтобы случайно не нажали)
+    class ResetConfirm(View):
+        def __init__(self):
+            super().__init__(timeout=60)
+
+        @discord.ui.button(label="Да, сбросить сезон", style=discord.ButtonStyle.danger, emoji="🪦")
+        async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id != ctx.author.id:
+                return await interaction.response.send_message("Это не твоя команда!", ephemeral=True)
+
+            # Сброс сезонных данных
+            global season_data
+            season_data.clear()
+
+            # Сброс Premium Track (если нужно полностью обнулить)
+            for uid in list(economy_data.keys()):
+                if uid != "server_vault":
+                    economy_data[uid]["premium_track_active"] = False
+                    economy_data[uid]["season_points"] = 0
+                    economy_data[uid].pop("season_xp_boost_end", None)
+                    economy_data[uid].pop("season_purchases", None)
+
+            # Сброс прогресса заданий
+            global daily_tasks_progress
+            daily_tasks_progress.clear()
+
+            # Сброс кэшей дневного XP
+            global daily_season_xp_earned, daily_season_xp_reset
+            daily_season_xp_earned.clear()
+            daily_season_xp_reset.clear()
+
+            save_seasons()
+            save_economy()
+            save_daily_tasks()
+
+            await interaction.response.edit_message(
+                content="🪦 **Сезон полностью сброшен!**\nВсе данные обнулены.\nГотов к новому запуску.",
+                view=None,
+                embed=None
+            )
+
+            # Лог в мод-канал
+            await send_mod_log(
+                title="🪦 Сезон вручную сброшен",
+                description=f"**Выполнил:** {ctx.author.mention}\n**Время:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                color=0xFF2D55
+            )
+
+        @discord.ui.button(label="Отмена", style=discord.ButtonStyle.secondary)
+        async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+            if interaction.user.id != ctx.author.id:
+                return
+            await interaction.response.edit_message(content="Сброс сезона отменён.", view=None)
+
+    embed = discord.Embed(
+        title="⚠️ Подтверждение сброса сезона",
+        description=(
+            "Ты собираешься **полностью обнулить** текущий сезон:\n"
+            "• Все уровни, XP, осколки\n"
+            "• Premium Track статус\n"
+            "• Прогресс заданий\n\n"
+            "**Действие необратимо!**"
+        ),
+        color=0xFF2D55
+    )
+    embed.set_footer(text="Действие в течение 60 секунд")
+
+    view = ResetConfirm()
+    await ctx.send(embed=embed, view=view, ephemeral=True)            
+
 # ───────────────────────────────────────────────
 # АВТОМАТИЧЕСКИЙ СБРОС СЕЗОНА (раз в месяц)
 # ───────────────────────────────────────────────
