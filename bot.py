@@ -324,7 +324,7 @@ daily_season_xp_reset = {} # {user_id: дата последнего сброс�
 current_season = {
     "id": "season_10",
     "name": "Восстание из мертвых",
-    "start_date": "2026-03-12",
+    "start_date": "2026-03-10",
     "end_date": "2026-04-05",
     "xp_per_message": 3,
     "xp_per_voice_minute": 2,
