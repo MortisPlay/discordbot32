@@ -316,7 +316,7 @@ def save_economy():
     except Exception as e:
         print(f"[SAVE CRITICAL] ОШИБКА: {e}")
         traceback.print_exc()
-        # ───────────────────────────────────────────────
+# ───────────────────────────────────────────────
 # ЗАГРУЗКА / СОХРАНЕНИЕ ОСТАЛЬНЫХ ФАЙЛОВ (faq, warnings, cases)
 # ───────────────────────────────────────────────
 def load_faq():
@@ -371,23 +371,44 @@ def load_cases():
 def save_cases():
     with open(CASES_FILE, "w", encoding="utf-8") as f:
         json.dump(cases_data, f, ensure_ascii=False, indent=2)
-        
+
 # ───────────────────────────────────────────────
-# МИГРАЦИЯ ИЗ СТАРОГО economy.json (выполнится один раз)
+# SQLITE — ЭКОНОМИКА + ПРИНУДИТЕЛЬНАЯ МИГРАЦИЯ ПРИ ПЕРВОМ ЗАПУСКЕ
 # ───────────────────────────────────────────────
-if os.path.exists(ECONOMY_FILE) and os.path.getsize(ECONOMY_FILE) > 10:
+
+MIGRATION_DONE_FILE = "migration_done.flag"
+
+def migrate_from_json_if_needed():
+    if os.path.exists(MIGRATION_DONE_FILE):
+        print("[MIGRATION] Уже выполнялась ранее → пропускаем")
+        return
+
+    if not os.path.exists(ECONOMY_FILE) or os.path.getsize(ECONOMY_FILE) < 10:
+        print("[MIGRATION] Старый economy.json не найден или пуст → новая база")
+        with open(MIGRATION_DONE_FILE, "w") as f:
+            f.write("done")
+        return
+
     try:
         with open(ECONOMY_FILE, "r", encoding="utf-8") as f:
-            old = json.load(f)
-        print("[MIGRATION] Переносим старые данные в SQLite...")
+            old_data = json.load(f)
+        print(f"[MIGRATION] Нашли старый файл → переносим {len(old_data)} записей...")
+
         with get_db() as conn:
             c = conn.cursor()
-            for uid, data in old.items():
+            migrated = 0
+            for uid, data in old_data.items():
                 if uid == "server_vault":
-                    c.execute("UPDATE server_vault SET value = ?", (data,))
+                    c.execute("UPDATE server_vault SET value = ? WHERE key = 'vault'", (data,))
                     continue
+
+                # Проверяем, существует ли уже пользователь (на случай повторного запуска)
+                c.execute("SELECT 1 FROM economy WHERE user_id = ?", (uid,))
+                if c.fetchone():
+                    continue  # уже есть, пропускаем
+
                 c.execute('''
-                    INSERT OR REPLACE INTO economy 
+                    INSERT INTO economy 
                     (user_id, balance, last_daily, last_message, multiplier_end, inventory, active_effects, investments)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
@@ -400,14 +421,27 @@ if os.path.exists(ECONOMY_FILE) and os.path.getsize(ECONOMY_FILE) > 10:
                     json.dumps(data.get("active_effects", [])),
                     json.dumps(data.get("investments", []))
                 ))
+                migrated += 1
+
             conn.commit()
-        print("[MIGRATION] Готово! Можно удалить economy.json")
-        # os.rename(ECONOMY_FILE, ECONOMY_FILE + ".old")  # раскомментируй, если хочешь
+
+        print(f"[MIGRATION] Успешно перенесено {migrated} пользователей")
+        
+        # Создаём флаг, чтобы больше не мигрировать
+        with open(MIGRATION_DONE_FILE, "w") as f:
+            f.write("done")
+            
+        # Можно раскомментировать, если хочешь убрать старый файл
+        # os.rename(ECONOMY_FILE, ECONOMY_FILE + ".migrated_backup")
+
     except Exception as e:
-        print(f"[MIGRATION ERROR] {e}")
-# Вызов загрузки
-init_db()       # создаёт таблицы, если их нет
-load_economy()  # загружает данные из .db
+        print(f"[MIGRATION CRITICAL] Ошибка переноса: {e}")
+        traceback.print_exc()
+
+# Вызовы загрузки (всегда выполняются)
+init_db()               # создаёт таблицы, если их нет
+migrate_from_json_if_needed()   # мигрирует только если нужно
+load_economy()          # загружает из .db
 load_faq()
 load_warnings()
 load_cases()
