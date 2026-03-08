@@ -16,6 +16,7 @@ import traceback
 import sys
 import sqlite3
 from contextlib import contextmanager
+import json
 # ───────────────────────────────────────────────
 # НАСТРОЙКИ (БЕЗ ТОКЕНА!)
 # ───────────────────────────────────────────────
@@ -1414,6 +1415,489 @@ class InventoryViewImproved(View):
         
         await interaction.response.edit_message(embed=embed, view=new_view)
 
+class TradeAcceptView(View):
+    """Вид для принятия или отклонения трейда"""
+    def __init__(self, trade_id: str, initiator_id: int, recipient_id: int):
+        super().__init__(timeout=300)  # 5 минут
+        self.trade_id = trade_id
+        self.initiator_id = initiator_id
+        self.recipient_id = recipient_id
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.recipient_id:
+            await interaction.response.send_message(
+                "❌ Это приглашение не для тебя!",
+                ephemeral=True
+            )
+            return False
+        return True
+    
+    @discord.ui.button(label="✅ Принять трейд", style=discord.ButtonStyle.green, emoji="🤝")
+    async def accept_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=False)
+        
+        if self.trade_id not in active_trades:
+            return await interaction.followup.send(
+                "❌ Трейд больше не существует или уже завершён.",
+                ephemeral=True
+            )
+        
+        trade = active_trades[self.trade_id]
+        
+        if trade["status"] != "pending":
+            return await interaction.followup.send(
+                "❌ Трейд уже в процессе или завершён.",
+                ephemeral=True
+            )
+        
+        trade["recipient_confirmed"] = True
+        trade["status"] = "both_confirmed"
+        
+        embed = discord.Embed(
+            title="🤝 Оба игрока согласны!",
+            description=f"Обмен будет выполнен в течение 10 секунд...",
+            color=0x2ecc71,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        await interaction.followup.send(embed=embed)
+        
+        await asyncio.sleep(10)
+        
+        initiator_id = str(trade["initiator_id"])
+        recipient_id = str(trade["recipient_id"])
+        
+        try:
+            initiator_items = trade["initiator_items"]
+            recipient_items = trade["recipient_items"]
+            
+            if initiator_id not in economy_data or recipient_id not in economy_data:
+                raise Exception("Один из игроков не найден в экономике")
+            
+            initiator_inv = economy_data[initiator_id].get("inventory", {})
+            recipient_inv = economy_data[recipient_id].get("inventory", {})
+            
+            for item_id, count in initiator_items.items():
+                if initiator_inv.get(item_id, 0) < count:
+                    raise Exception(f"У отправителя недостаточно предмета {item_id}")
+            
+            for item_id, count in recipient_items.items():
+                if recipient_inv.get(item_id, 0) < count:
+                    raise Exception(f"У получателя недостаточно предмета {item_id}")
+            
+            for item_id, count in initiator_items.items():
+                initiator_inv[item_id] = initiator_inv.get(item_id, 0) - count
+                if initiator_inv[item_id] == 0:
+                    del initiator_inv[item_id]
+                
+                recipient_inv[item_id] = recipient_inv.get(item_id, 0) + count
+            
+            for item_id, count in recipient_items.items():
+                recipient_inv[item_id] = recipient_inv.get(item_id, 0) - count
+                if recipient_inv[item_id] == 0:
+                    del recipient_inv[item_id]
+                
+                initiator_inv[item_id] = initiator_inv.get(item_id, 0) + count
+            
+            save_economy()
+            
+            trade["status"] = "completed"
+            
+            initiator_user = bot.get_user(int(initiator_id))
+            recipient_user = bot.get_user(int(recipient_id))
+            
+            success_embed = discord.Embed(
+                title="✅ Трейд успешно завершён!",
+                description=f"**{initiator_user.mention}** ↔️ **{recipient_user.mention}**",
+                color=0x2ecc71,
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            initiator_items_text = "\n".join([
+                f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+                for iid, cnt in initiator_items.items()
+            ])
+            recipient_items_text = "\n".join([
+                f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+                for iid, cnt in recipient_items.items()
+            ])
+            
+            success_embed.add_field(
+                name=f"📤 {initiator_user.display_name} отдал",
+                value=initiator_items_text or "Ничего",
+                inline=True
+            )
+            success_embed.add_field(
+                name=f"📥 {recipient_user.display_name} отдал",
+                value=recipient_items_text or "Ничего",
+                inline=True
+            )
+            
+            success_embed.set_footer(text=f"Трейд ID: {self.trade_id}")
+            
+            await interaction.channel.send(embed=success_embed)
+            
+            await send_mod_log(
+                title="🔄 Трейд завершён",
+                description=f"**От:** {initiator_user.mention}\n**Кому:** {recipient_user.mention}\n**ID:** {self.trade_id}",
+                color=0x2ecc71
+            )
+            
+            if (self.initiator_id, self.recipient_id) in trade_invitations:
+                del trade_invitations[(self.initiator_id, self.recipient_id)]
+        
+        except Exception as e:
+            error_embed = discord.Embed(
+                title="❌ Ошибка при выполнении трейда",
+                description=f"**Причина:** {str(e)}\n\nТрейд отменён.",
+                color=0xe74c3c,
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            await interaction.channel.send(embed=error_embed)
+            trade["status"] = "failed"
+    
+    @discord.ui.button(label="❌ Отклонить", style=discord.ButtonStyle.red, emoji="✖️")
+    async def reject_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=False)
+        
+        if self.trade_id not in active_trades:
+            return await interaction.followup.send(
+                "❌ Трейд уже не существует.",
+                ephemeral=True
+            )
+        
+        trade = active_trades[self.trade_id]
+        trade["status"] = "rejected"
+        
+        initiator_user = bot.get_user(int(trade["initiator_id"]))
+        reject_embed = discord.Embed(
+            title="❌ Трейд отклонён",
+            description=f"**{interaction.user.mention}** отклонил предложение от **{initiator_user.mention}**",
+            color=0xe74c3c,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        await interaction.followup.send(embed=reject_embed)
+        
+        if (self.initiator_id, self.recipient_id) in trade_invitations:
+            del trade_invitations[(self.initiator_id, self.recipient_id)]
+
+
+class TradeItemSelect(Select):
+    """Выбор предметов для трейда"""
+    def __init__(self, user_id: int, placeholder: str, custom_id: str):
+        self.user_id = user_id
+        
+        user_id_str = str(user_id)
+        if user_id_str not in economy_data:
+            options = [discord.SelectOption(label="Нет предметов", value="none", emoji="🚫")]
+        else:
+            inv = economy_data[user_id_str].get("inventory", {})
+            
+            if not inv:
+                options = [discord.SelectOption(label="Нет предметов", value="none", emoji="🚫")]
+            else:
+                options = []
+                for item_id, count in sorted(inv.items()):
+                    item = INVENTORY_ITEMS.get(item_id, {})
+                    name = item.get("name", item_id)
+                    emoji = item.get("emoji", "📦")
+                    label = f"{emoji} {name} ×{count}"[:100]
+                    
+                    options.append(
+                        discord.SelectOption(
+                            label=label,
+                            value=item_id,
+                            emoji=emoji,
+                            description=f"У тебя есть {count} шт."
+                        )
+                    )
+        
+        super().__init__(
+            placeholder=placeholder,
+            options=options[:25],
+            min_values=0,
+            max_values=min(5, len(options)) if options else 1,
+            custom_id=custom_id
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            self.values = []
+        
+        await interaction.response.defer()
+
+
+class TradeItemAmountModal(Modal, title="Укажи количество предметов"):
+    """Модальное окно для ввода количества предметов"""
+    def __init__(self, trade_id: str, user_role: str):
+        super().__init__()
+        self.trade_id = trade_id
+        self.user_role = user_role
+        
+        self.add_item(TextInput(
+            label="Предметы для обмена",
+            placeholder='Формат: item_id:количество (например: gift_box:2, xp_boost_24h:1)',
+            style=discord.TextStyle.paragraph,
+            required=False
+        ))
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        
+        if self.trade_id not in active_trades:
+            return await interaction.followup.send(
+                "❌ Трейд больше не существует.",
+                ephemeral=True
+            )
+        
+        trade = active_trades[self.trade_id]
+        input_text = self.children[0].value.strip()
+        
+        items_dict = {}
+        if input_text:
+            try:
+                pairs = [p.strip() for p in input_text.split(",") if p.strip()]
+                for pair in pairs:
+                    if ":" not in pair:
+                        raise ValueError(f"Неверный формат: {pair}")
+                    
+                    item_id, count_str = pair.split(":", 1)
+                    item_id = item_id.strip()
+                    count = int(count_str.strip())
+                    
+                    if count <= 0:
+                        raise ValueError(f"Количество должно быть > 0: {pair}")
+                    
+                    if item_id not in INVENTORY_ITEMS:
+                        raise ValueError(f"Предмет {item_id} не существует")
+                    
+                    user_id = str(interaction.user.id)
+                    user_inv = economy_data.get(user_id, {}).get("inventory", {})
+                    if user_inv.get(item_id, 0) < count:
+                        raise ValueError(f"У тебя нет {count} шт. {item_id}")
+                    
+                    items_dict[item_id] = count
+            
+            except Exception as e:
+                return await interaction.followup.send(
+                    f"❌ Ошибка при парсинге: {str(e)}\n\n"
+                    f"**Формат:** item_id:количество (например: gift_box:2, xp_boost_24h:1)",
+                    ephemeral=True
+                )
+        
+        if self.user_role == "initiator":
+            trade["initiator_items"] = items_dict
+            trade["initiator_confirmed"] = True
+        else:
+            trade["recipient_items"] = items_dict
+            trade["recipient_confirmed"] = True
+        
+        items_text = "\n".join([
+            f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+            for iid, cnt in items_dict.items()
+        ]) or "Ничего"
+        
+        confirm_embed = discord.Embed(
+            title="✅ Предметы добавлены",
+            description=f"Тебе нужно согласиться на трейд",
+            color=0x2ecc71
+        )
+        confirm_embed.add_field(
+            name="Твои предметы",
+            value=items_text,
+            inline=False
+        )
+        
+        await interaction.followup.send(embed=confirm_embed, ephemeral=True)
+
+
+class TradeConfirmView(View):
+    """Вид для подтверждения сторонами трейда"""
+    def __init__(self, trade_id: str, user_id: int, user_role: str):
+        super().__init__(timeout=600)
+        self.trade_id = trade_id
+        self.user_id = user_id
+        self.user_role = user_role
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "❌ Это не твой трейд!",
+                ephemeral=True
+            )
+            return False
+        return True
+    
+    @discord.ui.button(label="📝 Изменить предметы", style=discord.ButtonStyle.blurple, emoji="✏️")
+    async def edit_items(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = TradeItemAmountModal(self.trade_id, self.user_role)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="✅ Подтвердить трейд", style=discord.ButtonStyle.green, emoji="🤝")
+    async def confirm_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        if self.trade_id not in active_trades:
+            return await interaction.followup.send(
+                "❌ Трейд больше не существует.",
+                ephemeral=True
+            )
+        
+        trade = active_trades[self.trade_id]
+        
+        if self.user_role == "initiator":
+            trade["initiator_confirmed"] = True
+        else:
+            trade["recipient_confirmed"] = True
+        
+        if trade.get("initiator_confirmed") and trade.get("recipient_confirmed"):
+            trade["status"] = "both_confirmed"
+            
+            initiator = bot.get_user(int(trade["initiator_id"]))
+            recipient = bot.get_user(int(trade["recipient_id"]))
+            
+            ready_embed = discord.Embed(
+                title="🎉 Оба игрока готовы!",
+                description=f"Трейд между **{initiator.mention}** и **{recipient.mention}** будет выполнен в течение 10 секунд...",
+                color=0x2ecc71
+            )
+            
+            channel = interaction.channel
+            msg = await channel.send(embed=ready_embed)
+            
+            await asyncio.sleep(10)
+            
+            initiator_id = str(trade["initiator_id"])
+            recipient_id = str(trade["recipient_id"])
+            
+            try:
+                initiator_items = trade.get("initiator_items", {})
+                recipient_items = trade.get("recipient_items", {})
+                
+                if initiator_id not in economy_data or recipient_id not in economy_data:
+                    raise Exception("Один из игроков не найден")
+                
+                initiator_inv = economy_data[initiator_id].get("inventory", {})
+                recipient_inv = economy_data[recipient_id].get("inventory", {})
+                
+                for item_id, count in initiator_items.items():
+                    if initiator_inv.get(item_id, 0) < count:
+                        raise Exception(f"У отправителя недостаточно {item_id}")
+                
+                for item_id, count in recipient_items.items():
+                    if recipient_inv.get(item_id, 0) < count:
+                        raise Exception(f"У получателя недостаточно {item_id}")
+                
+                for item_id, count in initiator_items.items():
+                    initiator_inv[item_id] = initiator_inv.get(item_id, 0) - count
+                    if initiator_inv[item_id] == 0:
+                        del initiator_inv[item_id]
+                    
+                    recipient_inv[item_id] = recipient_inv.get(item_id, 0) + count
+                
+                for item_id, count in recipient_items.items():
+                    recipient_inv[item_id] = recipient_inv.get(item_id, 0) - count
+                    if recipient_inv[item_id] == 0:
+                        del recipient_inv[item_id]
+                    
+                    initiator_inv[item_id] = initiator_inv.get(item_id, 0) + count
+                
+                save_economy()
+                
+                trade["status"] = "completed"
+                
+                success_embed = discord.Embed(
+                    title="✅ Трейд успешно завершён!",
+                    description=f"**{initiator.mention}** ↔️ **{recipient.mention}**",
+                    color=0x2ecc71,
+                    timestamp=datetime.now(timezone.utc)
+                )
+                
+                initiator_items_text = "\n".join([
+                    f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+                    for iid, cnt in initiator_items.items()
+                ]) or "Ничего"
+                recipient_items_text = "\n".join([
+                    f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+                    for iid, cnt in recipient_items.items()
+                ]) or "Ничего"
+                
+                success_embed.add_field(
+                    name=f"📤 {initiator.display_name} отдал",
+                    value=initiator_items_text,
+                    inline=True
+                )
+                success_embed.add_field(
+                    name=f"📥 {recipient.display_name} отдал",
+                    value=recipient_items_text,
+                    inline=True
+                )
+                
+                success_embed.set_footer(text=f"Трейд ID: {self.trade_id}")
+                
+                await msg.edit(embed=success_embed)
+                
+                await send_mod_log(
+                    title="🔄 Трейд завершён",
+                    description=f"**От:** {initiator.mention}\n**Кому:** {recipient.mention}",
+                    color=0x2ecc71
+                )
+                
+                if (trade["initiator_id"], trade["recipient_id"]) in trade_invitations:
+                    del trade_invitations[(trade["initiator_id"], trade["recipient_id"])]
+            
+            except Exception as e:
+                error_embed = discord.Embed(
+                    title="❌ Ошибка при трейде",
+                    description=f"**Причина:** {str(e)}\n\nТрейд отменён, предметы вернулись.",
+                    color=0xe74c3c
+                )
+                await msg.edit(embed=error_embed)
+                trade["status"] = "failed"
+        else:
+            status_embed = discord.Embed(
+                title="⏳ Ожидание подтверждения",
+                description="Второй игрок должен подтвердить трейд",
+                color=0xf39c12
+            )
+            await interaction.followup.send(embed=status_embed, ephemeral=True)
+    
+    @discord.ui.button(label="❌ Отменить", style=discord.ButtonStyle.red, emoji="✖️")
+    async def cancel_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        if self.trade_id not in active_trades:
+            return await interaction.followup.send(
+                "❌ Трейд уже не существует.",
+                ephemeral=True
+            )
+        
+        trade = active_trades[self.trade_id]
+        trade["status"] = "cancelled"
+        
+        cancel_embed = discord.Embed(
+            title="❌ Трейд отменён",
+            description=f"**{interaction.user.mention}** отменил трейд",
+            color=0xe74c3c
+        )
+        
+        await interaction.channel.send(embed=cancel_embed)
+        await interaction.followup.send("✅ Трейд отменён.", ephemeral=True)
+        
+        if (trade["initiator_id"], trade["recipient_id"]) in trade_invitations:
+            del trade_invitations[(trade["initiator_id"], trade["recipient_id"])]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ФУНКЦИИ ТРЕЙДИНГА
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_trade_id() -> str:
+    """Генерирует уникальный ID трейда"""
+    import uuid
+    return f"trade_{str(uuid.uuid4())[:8]}"                    
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ОБРАБОТЧИКИ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2059,6 +2543,11 @@ async def on_ready():
 voice_start_time = {}
 daily_voice_earned = {}
 daily_voice_reset = {}
+# ─────────────────────────────────────────────────────────────────────────────
+# ГЛОБАЛЬНАЯ ПЕРЕМЕННАЯ ДЛЯ АКТИВНЫХ ТРЕЙДОВ
+# ─────────────────────────────────────────────────────────────────────────────
+active_trades = {}  # {trade_id: trade_data}
+trade_invitations = {}  # {(user1_id, user2_id): trade_id}
 # ───────────────────────────────────────────────
 # СОБЫТИЯ (продолжение)
 # ───────────────────────────────────────────────
@@ -3907,6 +4396,270 @@ async def use_item_command(ctx: commands.Context, item: str):
         await ctx.send(embed=result["embed"], ephemeral=True)
     else:
         await ctx.send(result["error"], ephemeral=True)
+
+@bot.hybrid_command(name="trade", description="🔄 Предложить трейд другому игроку")
+@app_commands.describe(member="Игрок для обмена")
+async def trade(ctx: commands.Context, member: discord.Member):
+    """Предложить трейд другому игроку"""
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Трейдинг только на сервере разработчика.",
+            ephemeral=True
+        )
+    
+    if member.id == ctx.author.id:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Нельзя торговать с собой!",
+            ephemeral=True
+        )
+    
+    if member.bot:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Нельзя торговать с ботами!",
+            ephemeral=True
+        )
+    
+    initiator_id = ctx.author.id
+    recipient_id = member.id
+    
+    if (initiator_id, recipient_id) in trade_invitations:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['warning']} У вас уже есть активный трейд с этим игроком!",
+            ephemeral=True
+        )
+    
+    initiator_inv = economy_data.get(str(initiator_id), {}).get("inventory", {})
+    if not initiator_inv:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} У тебя нет предметов в инвентаре!",
+            ephemeral=True
+        )
+    
+    trade_id = generate_trade_id()
+    active_trades[trade_id] = {
+        "trade_id": trade_id,
+        "initiator_id": initiator_id,
+        "recipient_id": recipient_id,
+        "initiator_items": {},
+        "recipient_items": {},
+        "initiator_confirmed": False,
+        "recipient_confirmed": False,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).timestamp()
+    }
+    
+    trade_invitations[(initiator_id, recipient_id)] = trade_id
+    
+    await ctx.defer(ephemeral=True)
+    
+    trade_embed = discord.Embed(
+        title="🔄 Предложение трейда",
+        description=f"**{ctx.author.mention}** предлагает трейд **{member.mention}**",
+        color=0x3498db,
+        timestamp=datetime.now(timezone.utc)
+    )
+    trade_embed.add_field(
+        name="📝 Следующие шаги",
+        value="1. Отправитель выбирает предметы\n2. Получатель выбирает предметы\n3. Оба подтверждают\n4. Трейд выполнен!",
+        inline=False
+    )
+    trade_embed.set_footer(text=f"Трейд ID: {trade_id}")
+    
+    view = TradeConfirmView(trade_id, initiator_id, "initiator")
+    
+    await ctx.send(embed=trade_embed, view=view, ephemeral=True)
+    
+    invite_embed = discord.Embed(
+        title="🔄 Тебе предлагают трейд!",
+        description=f"**{ctx.author.mention}** хочет торговать с тобой",
+        color=0x2ecc71,
+        timestamp=datetime.now(timezone.utc)
+    )
+    invite_embed.set_footer(text=f"Трейд ID: {trade_id}")
+    
+    recipient_view = TradeConfirmView(trade_id, recipient_id, "recipient")
+    
+    try:
+        await member.send(embed=invite_embed, view=recipient_view)
+    except:
+        await ctx.send(
+            f"{ECONOMY_EMOJIS['warning']} Не удалось отправить ДМ {member.mention}. "
+            f"Проверь, открыты ли тебе ДМ от участников сервера.",
+            ephemeral=True
+        )
+
+
+@bot.hybrid_command(name="tradelist", description="📋 Список активных трейдов")
+async def tradelist(ctx: commands.Context):
+    """Показать список активных трейдов"""
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Команда только на сервере разработчика.",
+            ephemeral=True
+        )
+    
+    user_trades = [
+        t for t in active_trades.values()
+        if t["initiator_id"] == ctx.author.id or t["recipient_id"] == ctx.author.id
+    ]
+    
+    if not user_trades:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['warning']} У тебя нет активных трейдов.",
+            ephemeral=True
+        )
+    
+    embed = discord.Embed(
+        title="📋 Твои трейды",
+        color=0x3498db,
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    for trade in user_trades[:10]:
+        initiator = bot.get_user(int(trade["initiator_id"]))
+        recipient = bot.get_user(int(trade["recipient_id"]))
+        
+        status_emoji = {
+            "pending": "⏳",
+            "both_confirmed": "✅",
+            "completed": "🎉",
+            "cancelled": "❌",
+            "rejected": "👎",
+            "failed": "💥"
+        }.get(trade["status"], "❓")
+        
+        field_name = f"{status_emoji} {initiator.display_name} ↔️ {recipient.display_name}"
+        field_value = f"**Статус:** {trade['status']}\n**ID:** `{trade['trade_id']}`"
+        
+        embed.add_field(name=field_name, value=field_value, inline=False)
+    
+    await ctx.send(embed=embed, ephemeral=True)
+
+
+@bot.hybrid_command(name="tradeinfo", description="ℹ️ Информация о трейде")
+@app_commands.describe(trade_id="ID трейда")
+async def tradeinfo(ctx: commands.Context, trade_id: str):
+    """Показать информацию о конкретном трейде"""
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Команда только на сервере разработчика.",
+            ephemeral=True
+        )
+    
+    trade = active_trades.get(trade_id)
+    if not trade:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Трейд `{trade_id}` не найден.",
+            ephemeral=True
+        )
+    
+    if trade["initiator_id"] != ctx.author.id and trade["recipient_id"] != ctx.author.id:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Это не твой трейд!",
+            ephemeral=True
+        )
+    
+    initiator = bot.get_user(int(trade["initiator_id"]))
+    recipient = bot.get_user(int(trade["recipient_id"]))
+    
+    embed = discord.Embed(
+        title=f"🔄 Трейд {trade_id}",
+        color=0x3498db,
+        timestamp=datetime.now(timezone.utc)
+    )
+    
+    embed.add_field(
+        name="👤 Отправитель",
+        value=f"{initiator.mention}\nПодтверждение: {'✅' if trade['initiator_confirmed'] else '❌'}",
+        inline=True
+    )
+    embed.add_field(
+        name="👤 Получатель",
+        value=f"{recipient.mention}\nПодтверждение: {'✅' if trade['recipient_confirmed'] else '❌'}",
+        inline=True
+    )
+    
+    initiator_items_text = "\n".join([
+        f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+        for iid, cnt in trade.get("initiator_items", {}).items()
+    ]) or "Не выбрано"
+    
+    recipient_items_text = "\n".join([
+        f"  • {INVENTORY_ITEMS.get(iid, {}).get('name', iid)} ×{cnt}"
+        for iid, cnt in trade.get("recipient_items", {}).items()
+    ]) or "Не выбрано"
+    
+    embed.add_field(
+        name=f"📤 {initiator.display_name} отдаёт",
+        value=initiator_items_text,
+        inline=False
+    )
+    embed.add_field(
+        name=f"📥 {recipient.display_name} отдаёт",
+        value=recipient_items_text,
+        inline=False
+    )
+    
+    status_emoji = {
+        "pending": "⏳",
+        "both_confirmed": "✅",
+        "completed": "🎉",
+        "cancelled": "❌",
+        "rejected": "👎",
+        "failed": "💥"
+    }.get(trade["status"], "❓")
+    
+    embed.add_field(name="📊 Статус", value=f"{status_emoji} {trade['status']}", inline=False)
+    
+    await ctx.send(embed=embed, ephemeral=True)
+
+
+@bot.hybrid_command(name="tradecancel", description="❌ Отменить трейд")
+@app_commands.describe(trade_id="ID трейда")
+async def tradecancel(ctx: commands.Context, trade_id: str):
+    """Отменить активный трейд"""
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Команда только на сервере разработчика.",
+            ephemeral=True
+        )
+    
+    trade = active_trades.get(trade_id)
+    if not trade:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Трейд `{trade_id}` не найден.",
+            ephemeral=True
+        )
+    
+    if trade["initiator_id"] != ctx.author.id and trade["recipient_id"] != ctx.author.id:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Это не твой трейд!",
+            ephemeral=True
+        )
+    
+    if trade["status"] in ["completed", "cancelled", "failed"]:
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Этот трейд уже завершён или отменён.",
+            ephemeral=True
+        )
+    
+    trade["status"] = "cancelled"
+    
+    initiator = bot.get_user(int(trade["initiator_id"]))
+    recipient = bot.get_user(int(trade["recipient_id"]))
+    
+    cancel_embed = discord.Embed(
+        title="❌ Трейд отменён",
+        description=f"**{ctx.author.mention}** отменил трейд между **{initiator.mention}** и **{recipient.mention}**",
+        color=0xe74c3c,
+        timestamp=datetime.now(timezone.utc)
+    )
+    cancel_embed.set_footer(text=f"Трейд ID: {trade_id}")
+    
+    await ctx.send(embed=cancel_embed, ephemeral=True)
+    
+    if (trade["initiator_id"], trade["recipient_id"]) in trade_invitations:
+        del trade_invitations[(trade["initiator_id"], trade["recipient_id"])]        
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
