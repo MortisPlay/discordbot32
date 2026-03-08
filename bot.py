@@ -122,6 +122,23 @@ INVENTORY_ITEMS = {
         "value": 2.0
     }
 }
+# Добавляем в начало файла (после настроек)
+GIFT_BOX_RANGES = [
+    (70,  500,  1200),   # 70% — 500–1200
+    (20,  1201, 1800),   # 20% — 1201–1800
+    (8,   1801, 2200),   # 8%  — 1801–2200
+    (2,   2201, 2500),   # 2%  — 2201–2500
+]
+
+# Новая функция
+def open_gift_box():
+    roll = random.randint(1, 100)
+    cumulative = 0
+    for chance, min_val, max_val in GIFT_BOX_RANGES:
+        cumulative += chance
+        if roll <= cumulative:
+            return random.randint(min_val, max_val)
+    return random.randint(500, 2500)  # fallback
 # ───────────────────────────────────────────────
 # АКЦИЯ 8 МАРТА
 # ───────────────────────────────────────────────
@@ -174,6 +191,12 @@ RARITIES = [
     ("Эпическая", 9, 200, 350, 0x9B59B6, "🌟"),
     ("Легендарная", 1, 500,1000, 0xF1C40F, "🔥")
 ]
+RARITY_STYLE = {
+    "common":    {"color": 0x95a5a6, "emoji": "⬜", "name": "Обычная"},
+    "rare":      {"color": 0x3498db, "emoji": "💎", "name": "Редкая"},
+    "epic":      {"color": 0x9b59b6, "emoji": "🌟", "name": "Эпическая"},
+    "legendary": {"color": 0xf1c40f, "emoji": "🔥", "name": "Легендарная"},
+}
 BAD_WORDS = [
     "пидор", "пидорас", "пидрила", "пидр", "гей", "хуесос", "ебанат", "дебил", "идиот",
     "тупой", "чмо", "чмошник", "сука", "блядь", "еблан", "мудак", "тварь", "урод"
@@ -685,22 +708,51 @@ def has_full_access(guild_id: int) -> bool:
 async def apply_wealth_tax(user_id: str) -> int:
     if user_id not in economy_data:
         return 0
-    balance = economy_data[user_id].get("balance", 0)
+    
+    data = economy_data[user_id]
+    balance = data.get("balance", 0)
     if balance <= TAX_THRESHOLD:
         return 0
+    
+    # Проверяем, когда последний раз применяли налог
+    last_tax_time = data.get("last_tax_time", 0)
+    now = datetime.now(timezone.utc).timestamp()
+    if now - last_tax_time < 86400:  # уже применяли сегодня
+        return 0
+    
     taxable = balance - TAX_THRESHOLD
     tax = int(taxable * TAX_RATE)
-    last_msg = economy_data[user_id].get("last_message", 0)
-    now = datetime.now(timezone.utc).timestamp()
+    
+    # Скидка за недавнюю активность
+    last_msg = data.get("last_message", 0)
     if now - last_msg < 86400:
         reduction = random.uniform(0.20, 0.50)
         tax = int(tax * (1 - reduction))
-    if tax > 0:
-        economy_data[user_id]["balance"] -= tax
-        economy_data["server_vault"] = economy_data.get("server_vault", 0) + tax
-        save_economy()
-        return tax
-    return 0
+    
+    if tax <= 0:
+        return 0
+    
+    # Применяем налог
+    data["balance"] -= tax
+    economy_data["server_vault"] = economy_data.get("server_vault", 0) + tax
+    
+    # Запоминаем время последнего налога
+    data["last_tax_time"] = now
+    
+    save_economy()
+    
+    # Можно отправить уведомление в ЛС, если хочешь
+    try:
+        user = bot.get_user(int(user_id))
+        if user:
+            await user.send(
+                f"💸 С вас списан налог на богатство: **-{format_number(tax)}** монет\n"
+                f"Новый баланс: **{format_number(data['balance'])}**"
+            )
+    except:
+        pass
+    
+    return tax
 # ───────────────────────────────────────────────
 # КЛАССЫ ДЛЯ UI
 # ───────────────────────────────────────────────
@@ -1319,6 +1371,40 @@ class ShopView(View):
             )
         modal = ShopConfirmModal(item_key, shop_item["name"], price, price)
         await interaction.response.send_modal(modal)
+
+class InventoryView(View):
+    def __init__(self, owner_id: int, inventory: dict):
+        super().__init__(timeout=180)
+        self.owner_id = owner_id
+        self.inventory = inventory.copy()  # копия, чтобы не мутировать оригинал
+
+        # Добавляем кнопки только для используемых предметов
+        usable_items = ["gift_box", "lucky_spin", "xp_boost_24h"]  # расширяй по мере добавления
+        row = 0
+        for item_id in usable_items:
+            if item_id in self.inventory and self.inventory[item_id] > 0:
+                item = INVENTORY_ITEMS.get(item_id, {})
+                name = item.get("name", item_id)
+                button = Button(
+                    label=f"Использовать {name}",
+                    style=discord.ButtonStyle.green,
+                    emoji=item.get("emoji", "🎁"),
+                    custom_id=f"use_{item_id}"
+                )
+                button.callback = self.create_use_callback(item_id)
+                self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Это не твой инвентарь!", ephemeral=True)
+            return False
+        return True
+
+    def create_use_callback(self, item_id: str):
+        async def callback(interaction: discord.Interaction):
+            # Здесь будет логика использования (пока заглушка)
+            await interaction.response.send_message(f"Попытка использовать {item_id}... (логика в разработке)", ephemeral=True)
+        return callback        
 # ───────────────────────────────────────────────
 # ИНИЦИАЛИЗАЦИЯ БОТА
 # ───────────────────────────────────────────────
@@ -2884,7 +2970,9 @@ async def balance(ctx: commands.Context, member: discord.Member = None):
                 "investments": []
             }
             save_economy()
-        tax = await apply_wealth_tax(user_id)
+        # Просто показываем, но НЕ применяем налог при просмотре
+        # Применение налога оставляем только в daily, pay, voice_income и т.д.
+        tax = 0  # или оставь вызов, но без save_economy() внутри apply_wealth_tax
         bal = economy_data[user_id]["balance"]
         vault = economy_data.get("server_vault", 0)
         users = [(k, v.get("balance", 0)) for k, v in economy_data.items() if k != "server_vault"]
@@ -3186,52 +3274,49 @@ async def inventory(ctx: commands.Context):
     )
     embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
-    # Цвета по редкости
-    rarity_colors = {
-        "common": 0x95a5a6,
-        "rare": 0x3498db,
-        "epic": 0x9b59b6,
-        "legendary": 0xf1c40f
-    }
-    rarity_emojis = {
-        "common": "⬜",
-        "rare": "💎",
-        "epic": "🌟",
-        "legendary": "🔥"
-    }
-
+    # Предметы
     if inv:
-        items_text = ""
-        for item_id, count in sorted(inv.items()):
+        items_lines = []
+        for item_id, count in sorted(inv.items(), key=lambda x: INVENTORY_ITEMS.get(x[0], {}).get("rarity", "common")):
             item = INVENTORY_ITEMS.get(item_id, {})
+            style = RARITY_STYLE.get(item.get("rarity", "common"), RARITY_STYLE["common"])
             name = item.get("name", item_id)
             emoji = item.get("emoji", "📦")
-            rarity = item.get("rarity", "common")
-            r_emoji = rarity_emojis.get(rarity, "📦")
-            color = rarity_colors.get(rarity, 0x808080)
-            items_text += f"**{r_emoji} {emoji} {name}** ×{count}\n"
-        embed.add_field(name="📦 Предметы", value=items_text.strip() or "Пусто", inline=False)
-        embed.color = color  # берём цвет самого редкого предмета (последнего в цикле)
+            line = f"{style['emoji']} **{emoji} {name}** ×{count}"
+            items_lines.append(line)
+        embed.add_field(name="📦 Предметы", value="\n".join(items_lines) or "Пусто", inline=False)
+        # Берём цвет самого редкого предмета
+        rarest = max([item.get("rarity", "common") for item in inv.values()], key=lambda r: list(RARITY_STYLE.keys()).index(r) if r in RARITY_STYLE else -1)
+        embed.color = RARITY_STYLE[rarest]["color"]
     else:
         embed.add_field(name="📦 Предметы", value="Пусто — сходи в `/shop`!", inline=False)
 
-    # Активные эффекты
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-    active_text = ""
-    for eff in effects:
-        time_left = eff.get("ends_at", 0) - now_ts
-        if time_left > 0:
-            h = time_left // 3600
-            m = (time_left % 3600) // 60
-            active_text += f"**{eff.get('name', eff['type'])} ×{eff.get('value', 1)}** — осталось {h}ч {m}мин\n"
+    # Активные эффекты с прогресс-барами
+    now_ts = datetime.now(timezone.utc).timestamp()
+    active_lines = []
+    for eff in effects[:10]:  # лимит 10, чтобы не заспамить
+        ends_at = eff.get("ends_at", 0)
+        if ends_at <= now_ts:
+            continue
+        time_left_sec = ends_at - now_ts
+        hours_left = int(time_left_sec // 3600)
+        mins_left = int((time_left_sec % 3600) // 60)
+        progress = (time_left_sec / (eff.get("duration_sec", 86400))) * 100
+        bar = create_progress_bar(int(progress), 100, length=12)
+        name = eff.get("name", eff.get("effect_type", "Эффект"))
+        value = eff.get("value", 1)
+        line = f"**{name} ×{value}** — осталось {hours_left}ч {mins_left}мин\n`{bar}` **{int(progress)}%**"
+        active_lines.append(line)
+
     embed.add_field(
         name="✨ Активные эффекты",
-        value=active_text.strip() or "Нет активных эффектов",
+        value="\n".join(active_lines) or "Нет активных эффектов",
         inline=False
     )
 
-    embed.set_footer(text=f"Баланс: {format_number(data['balance'])} {ECONOMY_EMOJIS['coin']}")
-    await ctx.send(embed=embed, ephemeral=True)
+    embed.set_footer(text=f"Баланс: {format_number(data['balance'])} {ECONOMY_EMOJIS['coin']} • /use <название> для использования")
+    view = InventoryView(ctx.author.id, inv)  # ← добавим позже кнопки
+    await ctx.send(embed=embed, view=view, ephemeral=True)
 
 @bot.hybrid_command(name="use", description="Использовать предмет из инвентаря")
 @app_commands.describe(item="Название предмета")
@@ -3250,21 +3335,28 @@ async def use_item(ctx: commands.Context, item: str):
         return await ctx.send(f"У вас нет предмета **{item}**.", ephemeral=True)
 
     if item_id == "gift_box":
-        reward = random.randint(500, 5000)
-        economy_data[user_id]["balance"] += reward
-        inv[item_id] -= 1
-        if inv[item_id] == 0:
-            del inv[item_id]
-        save_economy()
+         reward = open_gift_box()           # ← новая функция
+         economy_data[user_id]["balance"] += reward
+         inv[item_id] -= 1
+    if inv[item_id] == 0:
+        del inv[item_id]
+    save_economy()
 
-        embed = discord.Embed(
-            title="🎁 Коробка открыта!",
-            description=f"Ты нашёл **{format_number(reward)}** {ECONOMY_EMOJIS['coin']}!",
-            color=0xFFD700
-        )
-        await ctx.send(embed=embed, ephemeral=True)
-    else:
-        await ctx.send(f"Предмет **{item}** пока нельзя использовать.", ephemeral=True)
+    rarity = "обычная"
+    color = 0xA8A8A8
+    if reward >= 2200:
+        rarity = "легендарная!"
+        color = 0xF1C40F
+    elif reward >= 1800:
+        rarity = "эпическая!"
+        color = 0x9B59B6
+
+    embed = discord.Embed(
+        title="🎁 Коробка открыта!",
+        description=f"Ты нашёл **{format_number(reward)}** {ECONOMY_EMOJIS['coin']}!\nРедкость: **{rarity}**",
+        color=color
+    )
+    await ctx.send(embed=embed, ephemeral=True)
 
 @bot.hybrid_command(name="admin_coins", description="⚙️ Изменить количество монет у пользователя (только для админов)")
 @app_commands.describe(
