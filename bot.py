@@ -14,6 +14,8 @@ from collections import defaultdict, deque
 import uuid
 import traceback
 import sys
+import sqlite3
+from contextlib import contextmanager
 # ───────────────────────────────────────────────
 # НАСТРОЙКИ (БЕЗ ТОКЕНА!)
 # ───────────────────────────────────────────────
@@ -218,81 +220,105 @@ cases_data = {}
 spam_cache = {}
 raid_cache = defaultdict(list)
 temp_roles = {}
-investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
+voice_start_time = {}
+daily_voice_earned = {}
 # ───────────────────────────────────────────────
-# ЗАГРУЗКА / СОХРАНЕНИЕ
+# SQLITE — ЭКОНОМИКА (НОВЫЙ НАДЁЖНЫЙ СОХРАНЯЛКА)
 # ───────────────────────────────────────────────
-import os
-import shutil
-import json
+DB_FILE = "economy.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS economy (
+            user_id TEXT PRIMARY KEY,
+            balance INTEGER DEFAULT 0,
+            last_daily REAL DEFAULT 0,
+            last_message REAL DEFAULT 0,
+            multiplier_end REAL DEFAULT 0,
+            inventory TEXT DEFAULT '{}',
+            active_effects TEXT DEFAULT '[]',
+            investments TEXT DEFAULT '[]'
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS server_vault (
+            key TEXT PRIMARY KEY,
+            value INTEGER DEFAULT 0
+        )
+    ''')
+    c.execute("INSERT OR IGNORE INTO server_vault (key, value) VALUES ('vault', 0)")
+    conn.commit()
+    conn.close()
+
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
 def load_economy():
     global economy_data
-   
-    file_path = ECONOMY_FILE
-    backup_path = file_path + ".bak"
-   
-    loaded = False
-   
-    if os.path.exists(file_path) and os.path.getsize(file_path) > 10:
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                economy_data = json.load(f)
-            loaded = True
-            print("[ECONOMY LOAD] Основной файл успешно загружен")
-        except Exception as e:
-            print(f"[ECONOMY LOAD] Основной файл повреждён: {e}")
-   
-    if not loaded and os.path.exists(backup_path):
-        try:
-            with open(backup_path, "r", encoding="utf-8") as f:
-                economy_data = json.load(f)
-            print("[ECONOMY LOAD] Восстановлено из бэкапа")
-            save_economy()
-            loaded = True
-        except Exception as e:
-            print(f"[ECONOMY LOAD] Бэкап повреждён: {e}")
-   
-    if not loaded:
-        economy_data = {"server_vault": 0}
-        print("[ECONOMY LOAD] Создан пустой словарь")
-   
-    # Инициализация новых полей
-    for user_id in list(economy_data.keys()):
-        if user_id == "server_vault":
-            continue
-        user_data = economy_data[user_id]
-        user_data.setdefault("balance", 0)
-        user_data.setdefault("last_daily", 0)
-        user_data.setdefault("last_message", 0)
-        user_data.setdefault("investments", [])
-        user_data.setdefault("inventory", {})          # ← новый словарь для предметов
-        user_data.setdefault("active_effects", [])     # ← список активных временных эффектов
-   
-    print(f"[ECONOMY] Данные загружены ({len(economy_data)-1} игроков)")
+    economy_data = {"server_vault": 0}
+    
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("SELECT value FROM server_vault WHERE key = 'vault'")
+        row = c.fetchone()
+        if row:
+            economy_data["server_vault"] = row[0]
+        
+        c.execute("SELECT user_id, balance, last_daily, last_message, multiplier_end, inventory, active_effects, investments FROM economy")
+        for row in c.fetchall():
+            uid = row[0]
+            economy_data[uid] = {
+                "balance": row[1] or 0,
+                "last_daily": row[2] or 0,
+                "last_message": row[3] or 0,
+                "multiplier_end": row[4] or 0,
+                "inventory": json.loads(row[5] or '{}'),
+                "active_effects": json.loads(row[6] or '[]'),
+                "investments": json.loads(row[7] or '[]')
+            }
+    
+    print(f"[ECONOMY] Загружено из SQLite: {len(economy_data)-1} игроков")
 
 def save_economy():
-    global economy_data
-    if not economy_data:
-        return
-    file_path = ECONOMY_FILE
-    backup_path = file_path + ".bak"
-    tmp_path = file_path + ".tmp"
     try:
-        if os.path.exists(file_path):
-            shutil.copy2(file_path, backup_path)
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(economy_data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, file_path)
-        print(f"[SAVE] economy.json сохранён")
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("UPDATE server_vault SET value = ? WHERE key = 'vault'", 
+                     (economy_data.get("server_vault", 0),))
+            
+            for uid, data in economy_data.items():
+                if uid == "server_vault": continue
+                c.execute('''
+                    INSERT OR REPLACE INTO economy 
+                    (user_id, balance, last_daily, last_message, multiplier_end, inventory, active_effects, investments)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    uid,
+                    data.get("balance", 0),
+                    data.get("last_daily", 0),
+                    data.get("last_message", 0),
+                    data.get("multiplier_end", 0),
+                    json.dumps(data.get("inventory", {})),
+                    json.dumps(data.get("active_effects", [])),
+                    json.dumps(data.get("investments", []))
+                ))
+            conn.commit()
+        print("[SAVE] SQLite — экономика сохранена")
     except Exception as e:
-        print(f"[SAVE CRITICAL] Ошибка: {e}")
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(economy_data, f, ensure_ascii=False, indent=2)
-        except Exception as e2:
-            print(f"[SAVE TOTAL FAIL] {e2}")
+        print(f"[SAVE CRITICAL] ОШИБКА: {e}")
+        traceback.print_exc()
+        # ───────────────────────────────────────────────
+# ЗАГРУЗКА / СОХРАНЕНИЕ ОСТАЛЬНЫХ ФАЙЛОВ (faq, warnings, cases)
+# ───────────────────────────────────────────────
 def load_faq():
     global faq_data
     if os.path.exists(FAQ_FILE):
@@ -306,12 +332,14 @@ def load_faq():
     else:
         faq_data = {}
         print("[FAQ] Файл не найден → создан пустой")
+
 def save_faq():
     try:
         with open(FAQ_FILE, "w", encoding="utf-8") as f:
             json.dump(faq_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[SAVE FAQ] Ошибка: {e}")
+
 def load_warnings():
     global warnings_data
     if os.path.exists(WARNINGS_FILE):
@@ -324,9 +352,11 @@ def load_warnings():
             warnings_data = {}
     else:
         warnings_data = {}
+
 def save_warnings():
     with open(WARNINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(warnings_data, f, ensure_ascii=False, indent=2)
+
 def load_cases():
     global cases_data
     if os.path.exists(CASES_FILE):
@@ -337,17 +367,50 @@ def load_cases():
             cases_data = {}
     else:
         cases_data = {}
+
 def save_cases():
     with open(CASES_FILE, "w", encoding="utf-8") as f:
         json.dump(cases_data, f, ensure_ascii=False, indent=2)
+        
+# ───────────────────────────────────────────────
+# МИГРАЦИЯ ИЗ СТАРОГО economy.json (выполнится один раз)
+# ───────────────────────────────────────────────
+if os.path.exists(ECONOMY_FILE) and os.path.getsize(ECONOMY_FILE) > 10:
+    try:
+        with open(ECONOMY_FILE, "r", encoding="utf-8") as f:
+            old = json.load(f)
+        print("[MIGRATION] Переносим старые данные в SQLite...")
+        with get_db() as conn:
+            c = conn.cursor()
+            for uid, data in old.items():
+                if uid == "server_vault":
+                    c.execute("UPDATE server_vault SET value = ?", (data,))
+                    continue
+                c.execute('''
+                    INSERT OR REPLACE INTO economy 
+                    (user_id, balance, last_daily, last_message, multiplier_end, inventory, active_effects, investments)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    uid,
+                    data.get("balance", 0),
+                    data.get("last_daily", 0),
+                    data.get("last_message", 0),
+                    data.get("multiplier_end", 0),
+                    json.dumps(data.get("inventory", {})),
+                    json.dumps(data.get("active_effects", [])),
+                    json.dumps(data.get("investments", []))
+                ))
+            conn.commit()
+        print("[MIGRATION] Готово! Можно удалить economy.json")
+        # os.rename(ECONOMY_FILE, ECONOMY_FILE + ".old")  # раскомментируй, если хочешь
+    except Exception as e:
+        print(f"[MIGRATION ERROR] {e}")
 # Вызов загрузки
-load_economy()
+init_db()       # создаёт таблицы, если их нет
+load_economy()  # загружает данные из .db
 load_faq()
 load_warnings()
 load_cases()
-if "server_vault" not in economy_data:
-    economy_data["server_vault"] = 0
-    save_economy()
 # ───────────────────────────────────────────────
 # ФУНКЦИИ ДЛЯ ПРОВЕРКИ ПРАВ
 # ───────────────────────────────────────────────
@@ -1245,7 +1308,7 @@ bot = commands.Bot(
 # ───────────────────────────────────────────────
 # ФОНОВЫЕ ЗАДАЧИ
 # ───────────────────────────────────────────────
-@tasks.loop(seconds=60)
+@tasks.loop(seconds=30)
 async def autosave_economy_task():
     save_economy()
     print("[AUTO] Экономика сохранена")
