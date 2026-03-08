@@ -250,7 +250,7 @@ daily_voice_earned = {}
 # ───────────────────────────────────────────────
 # SQLITE — ЭКОНОМИКА (НОВЫЙ НАДЁЖНЫЙ СОХРАНЯЛКА)
 # ───────────────────────────────────────────────
-DB_FILE = "economy.db"
+DB_FILE = "/app/data/economy.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
@@ -461,6 +461,8 @@ def migrate_from_json_if_needed():
         print(f"[MIGRATION CRITICAL] Ошибка переноса: {e}")
         traceback.print_exc()
 
+import os
+os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 # Вызовы загрузки (всегда выполняются)
 init_db()               # создаёт таблицы, если их нет
 migrate_from_json_if_needed()   # мигрирует только если нужно
