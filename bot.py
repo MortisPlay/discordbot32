@@ -267,20 +267,10 @@ def load_economy():
         user_data.setdefault("last_daily", 0)
         user_data.setdefault("last_message", 0)
         user_data.setdefault("investments", [])
-   
-    print(f"[ECONOMY] Данные загружены ({len(economy_data)-1} игроков)")
-
-        # Инициализация новых полей
-    for user_id in list(economy_data.keys()):
-        if user_id == "server_vault":
-            continue
-        user_data = economy_data[user_id]
-        user_data.setdefault("balance", 0)
-        user_data.setdefault("last_daily", 0)
-        user_data.setdefault("last_message", 0)
-        user_data.setdefault("investments", [])
         user_data.setdefault("inventory", {})          # ← новый словарь для предметов
         user_data.setdefault("active_effects", [])     # ← список активных временных эффектов
+   
+    print(f"[ECONOMY] Данные загружены ({len(economy_data)-1} игроков)")
 
 def save_economy():
     global economy_data
@@ -1140,21 +1130,22 @@ class ShopConfirmModal(Modal, title="Подтверждение покупки")
                 )
             else:
                 msg = f"{ECONOMY_EMOJIS['error']} Роль VIP не найдена! Монеты списаны, но роль не выдана."
+
         elif self.item_key == "multiplier":
             if "multiplier_end" not in economy_data[user_id]:
                 economy_data[user_id]["multiplier_end"] = 0
             economy_data[user_id]["multiplier_end"] = (
                 datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
             )
-            # Добавляем обработку предметов инвентаря
-        elif self.item_key in INVENTORY_ITEMS or shop_item.get("type") == "inventory_item":
+            msg = f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀"
+
+        elif shop_item.get("type") == "inventory_item":
             item_id = shop_item.get("item_id", self.item_key)
             inv = economy_data[user_id].setdefault("inventory", {})
             inv[item_id] = inv.get(item_id, 0) + 1
-            save_economy()
             msg = f"{ECONOMY_EMOJIS['success']} **{shop_item['name']}** добавлен в инвентарь! 🎒\nИспользуй `/inventory`"
-            save_economy()
-            msg = f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀"
+
+        save_economy()  # один раз в конце
         await interaction.response.send_message(msg, ephemeral=True)
         log_desc = (
             f"**Пользователь:** {interaction.user.mention}\n"
@@ -1189,6 +1180,9 @@ class ShopView(View):
     @discord.ui.button(label="Купить ×1.5", style=discord.ButtonStyle.blurple, emoji="🚀", custom_id="shop_multiplier", row=0)
     async def buy_multiplier(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_button(interaction, "multiplier")
+    @discord.ui.button(label="Купить Подарочную коробку", style=discord.ButtonStyle.blurple, emoji="🎁", custom_id="shop_gift_box", row=0)
+    async def buy_gift_box(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._handle_button(interaction, "gift_box")    
     async def _handle_button(self, interaction: discord.Interaction, item_key: str):
         if item_key not in SHOP_ITEMS:
             return await interaction.response.send_message(
@@ -1213,6 +1207,12 @@ class ShopView(View):
                 f"{ECONOMY_EMOJIS['warning']} У вас уже есть **{shop_item['name']}**!",
                 ephemeral=True
             )
+        elif item_key == "gift_box":
+            inv = economy_data[user_id].get("inventory", {})
+            if inv.get("gift_box", 0) >= 10:
+                return await interaction.response.send_message(
+                    f"{ECONOMY_EMOJIS['warning']} У тебя уже максимум подарочных коробок (10 шт)!", ephemeral=True
+                )
         price = get_discounted_price(shop_item["price"], item_key, interaction.user)
         if balance < price:
             return await interaction.response.send_message(
