@@ -3274,37 +3274,73 @@ async def inventory(ctx: commands.Context):
     )
     embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
-    # Предметы
+    # ─── Предметы ────────────────────────────────────────────────────────
     if inv:
         items_lines = []
-        for item_id, count in sorted(inv.items(), key=lambda x: INVENTORY_ITEMS.get(x[0], {}).get("rarity", "common")):
+        rarest_rarity = "common"
+        rarity_order = ["common", "rare", "epic", "legendary"]
+
+        for item_id, count in inv.items():
             item = INVENTORY_ITEMS.get(item_id, {})
-            style = RARITY_STYLE.get(item.get("rarity", "common"), RARITY_STYLE["common"])
+            rarity = item.get("rarity", "common")
+            style = RARITY_STYLE.get(rarity, RARITY_STYLE["common"])
             name = item.get("name", item_id)
             emoji = item.get("emoji", "📦")
-            line = f"{style['emoji']} **{emoji} {name}** ×{count}"
-            items_lines.append(line)
-        embed.add_field(name="📦 Предметы", value="\n".join(items_lines) or "Пусто", inline=False)
-        # Берём цвет самого редкого предмета
-        rarest = max([item.get("rarity", "common") for item in inv.values()], key=lambda r: list(RARITY_STYLE.keys()).index(r) if r in RARITY_STYLE else -1)
-        embed.color = RARITY_STYLE[rarest]["color"]
-    else:
-        embed.add_field(name="📦 Предметы", value="Пусто — сходи в `/shop`!", inline=False)
 
-    # Активные эффекты с прогресс-барами
+            # Добавляем строку в список
+            items_lines.append(f"{style['emoji']} **{emoji} {name}** ×{count}")
+
+            # Обновляем самую редкую редкость
+            if rarity_order.index(rarity) > rarity_order.index(rarest_rarity):
+                rarest_rarity = rarity
+
+        # Сортируем предметы от самой редкой к самой обычной
+        def get_rarity_index(line):
+            for r in rarity_order:
+                if RARITY_STYLE[r]["emoji"] in line:
+                    return rarity_order.index(r)
+            return 0
+
+        items_lines.sort(key=get_rarity_index, reverse=True)
+
+        embed.add_field(
+            name="📦 Предметы",
+            value="\n".join(items_lines) or "Пусто",
+            inline=False
+        )
+
+        # Устанавливаем цвет по самой редкой вещи
+        embed.color = RARITY_STYLE[rarest_rarity]["color"]
+
+    else:
+        embed.add_field(
+            name="📦 Предметы",
+            value="Пусто — сходи в `/shop`!",
+            inline=False
+        )
+
+    # ─── Активные эффекты ────────────────────────────────────────────────
     now_ts = datetime.now(timezone.utc).timestamp()
     active_lines = []
+
     for eff in effects[:10]:  # лимит 10, чтобы не заспамить
         ends_at = eff.get("ends_at", 0)
         if ends_at <= now_ts:
             continue
+
         time_left_sec = ends_at - now_ts
         hours_left = int(time_left_sec // 3600)
         mins_left = int((time_left_sec % 3600) // 60)
-        progress = (time_left_sec / (eff.get("duration_sec", 86400))) * 100
+
+        # Если duration_sec не задан — берём разумное значение по умолчанию
+        duration_sec = eff.get("duration_sec", 24 * 3600)  # 24 часа по умолчанию
+        progress = (time_left_sec / duration_sec) * 100
+        progress = max(0, min(100, progress))  # ограничиваем 0–100
+
         bar = create_progress_bar(int(progress), 100, length=12)
         name = eff.get("name", eff.get("effect_type", "Эффект"))
         value = eff.get("value", 1)
+
         line = f"**{name} ×{value}** — осталось {hours_left}ч {mins_left}мин\n`{bar}` **{int(progress)}%**"
         active_lines.append(line)
 
@@ -3314,8 +3350,11 @@ async def inventory(ctx: commands.Context):
         inline=False
     )
 
-    embed.set_footer(text=f"Баланс: {format_number(data['balance'])} {ECONOMY_EMOJIS['coin']} • /use <название> для использования")
-    view = InventoryView(ctx.author.id, inv)  # ← добавим позже кнопки
+    embed.set_footer(
+        text=f"Баланс: {format_number(data['balance'])} {ECONOMY_EMOJIS['coin']} • /use <название> для использования"
+    )
+
+    view = InventoryView(ctx.author.id, inv)
     await ctx.send(embed=embed, view=view, ephemeral=True)
 
 @bot.hybrid_command(name="use", description="Использовать предмет из инвентаря")
