@@ -37,7 +37,7 @@ TICKET_CATEGORY_ID = 1475334525344157807
 SUPPORT_ROLE_ID = 1475331888163066029
 SPAM_THRESHOLD = 5
 SPAM_TIME = 8
-ECONOMY_AUTOSAVE_INTERVAL = 300
+ECONOMY_AUTOSAVE_INTERVAL = 60
 DAILY_COOLDOWN = 86400
 MESSAGE_COOLDOWN = 60
 TAX_THRESHOLD = 10000
@@ -82,6 +82,42 @@ SHOP_ITEMS = {
         "price": 1000,
         "duration_days": 7,
         "description": "×1.5 к доходу от сообщений и daily"
+    },
+    "gift_box": {
+        "name": "Подарочная коробка",
+        "price": 1500,
+        "description": "Случайно от 500 до 5000 монет при использовании",
+        "type": "inventory_item",
+        "item_id": "gift_box"
+    }
+}
+
+# ───────────────────────────────────────────────
+# ПРЕДМЕТЫ ИНВЕНТАРЯ (расширяй по желанию)
+# ───────────────────────────────────────────────
+INVENTORY_ITEMS = {
+    "gift_box": {
+        "name": "Подарочная коробка",
+        "emoji": "🎁",
+        "description": "Содержит случайную сумму от 500 до 5000 монет",
+        "rarity": "rare",
+        "one_use": True
+    },
+    "lucky_spin": {
+        "name": "Счастливая крутка",
+        "emoji": "🎰",
+        "description": "Одно бесплатное открытие кейса",
+        "rarity": "epic",
+        "one_use": True
+    },
+    "xp_boost_24h": {
+        "name": "Буст опыта ×2 (24ч)",
+        "emoji": "⚡",
+        "description": "Удваивает получаемый XP на 24 часа",
+        "rarity": "legendary",
+        "duration_hours": 24,
+        "effect_type": "xp_multiplier",
+        "value": 2.0
     }
 }
 # ───────────────────────────────────────────────
@@ -186,9 +222,6 @@ investments_data = {}
 unauthorized_attempts = defaultdict(list)
 faq_data = {}
 # ───────────────────────────────────────────────
-# ЕЖЕДНЕВНЫЕ ЗАДАНИЯ (простая реализация) — УДАЛЕНО ВСЁ СЕЗОННОЕ
-# ───────────────────────────────────────────────
-# ───────────────────────────────────────────────
 # ЗАГРУЗКА / СОХРАНЕНИЕ
 # ───────────────────────────────────────────────
 import os
@@ -236,6 +269,19 @@ def load_economy():
         user_data.setdefault("investments", [])
    
     print(f"[ECONOMY] Данные загружены ({len(economy_data)-1} игроков)")
+
+        # Инициализация новых полей
+    for user_id in list(economy_data.keys()):
+        if user_id == "server_vault":
+            continue
+        user_data = economy_data[user_id]
+        user_data.setdefault("balance", 0)
+        user_data.setdefault("last_daily", 0)
+        user_data.setdefault("last_message", 0)
+        user_data.setdefault("investments", [])
+        user_data.setdefault("inventory", {})          # ← новый словарь для предметов
+        user_data.setdefault("active_effects", [])     # ← список активных временных эффектов
+
 def save_economy():
     global economy_data
     if not economy_data:
@@ -1100,6 +1146,13 @@ class ShopConfirmModal(Modal, title="Подтверждение покупки")
             economy_data[user_id]["multiplier_end"] = (
                 datetime.now(timezone.utc).timestamp() + (shop_item["duration_days"] * 86400)
             )
+            # Добавляем обработку предметов инвентаря
+        elif self.item_key in INVENTORY_ITEMS or shop_item.get("type") == "inventory_item":
+            item_id = shop_item.get("item_id", self.item_key)
+            inv = economy_data[user_id].setdefault("inventory", {})
+            inv[item_id] = inv.get(item_id, 0) + 1
+            save_economy()
+            msg = f"{ECONOMY_EMOJIS['success']} **{shop_item['name']}** добавлен в инвентарь! 🎒\nИспользуй `/inventory`"
             save_economy()
             msg = f"{ECONOMY_EMOJIS['success']} Удвоитель ×1.5 активирован на 7 дней! 🚀"
         await interaction.response.send_message(msg, ephemeral=True)
@@ -3014,6 +3067,94 @@ async def shop(ctx: commands.Context):
     except Exception as e:
         await send_error_embed(ctx, f"Ошибка в магазине: {str(e)}")
         print(f"[SHOP ERROR] {e}")
+
+@bot.hybrid_command(name="inventory", description="🎒 Ваш инвентарь")
+async def inventory(ctx: commands.Context):
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Экономика доступна только на основном сервере.",
+            ephemeral=True
+        )
+
+    user_id = str(ctx.author.id)
+    if user_id not in economy_data:
+        economy_data[user_id] = {"balance": 0, "inventory": {}, "active_effects": []}
+        save_economy()
+
+    data = economy_data[user_id]
+    inv = data.get("inventory", {})
+    effects = data.get("active_effects", [])
+
+    embed = discord.Embed(
+        title=f"🎒 Инвентарь {ctx.author.display_name}",
+        color=COLORS["economy"],
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+
+    # Предметы
+    if inv:
+        items_text = ""
+        for item_id, count in inv.items():
+            item = INVENTORY_ITEMS.get(item_id, {})
+            name = item.get("name", item_id)
+            emoji = item.get("emoji", "📦")
+            items_text += f"{emoji} **{name}** ×{count}\n"
+        embed.add_field(name="📦 Предметы", value=items_text.strip() or "Пусто", inline=False)
+    else:
+        embed.add_field(name="📦 Предметы", value="Пусто", inline=False)
+
+    # Активные эффекты
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    active_text = ""
+    for eff in effects:
+        time_left = eff.get("ends_at", 0) - now_ts
+        if time_left > 0:
+            h = time_left // 3600
+            m = (time_left % 3600) // 60
+            active_text += f"**{eff.get('name', eff['type'])} ×{eff.get('value', 1)}** — осталось {h}ч {m}мин\n"
+    embed.add_field(
+        name="✨ Активные эффекты",
+        value=active_text.strip() or "Нет активных эффектов",
+        inline=False
+    )
+
+    embed.set_footer(text=f"Баланс: {format_number(data['balance'])} {ECONOMY_EMOJIS['coin']}")
+    await ctx.send(embed=embed, ephemeral=True)
+
+@bot.hybrid_command(name="use", description="Использовать предмет из инвентаря")
+@app_commands.describe(item="Название предмета")
+async def use_item(ctx: commands.Context, item: str):
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Только на основном сервере.", ephemeral=True)
+
+    user_id = str(ctx.author.id)
+    if user_id not in economy_data or "inventory" not in economy_data[user_id]:
+        return await ctx.send("У вас пустой инвентарь.", ephemeral=True)
+
+    inv = economy_data[user_id]["inventory"]
+    item_id = item.lower()
+
+    if item_id not in inv or inv[item_id] <= 0:
+        return await ctx.send(f"У вас нет предмета **{item}**.", ephemeral=True)
+
+    if item_id == "gift_box":
+        reward = random.randint(500, 5000)
+        economy_data[user_id]["balance"] += reward
+        inv[item_id] -= 1
+        if inv[item_id] == 0:
+            del inv[item_id]
+        save_economy()
+
+        embed = discord.Embed(
+            title="🎁 Коробка открыта!",
+            description=f"Ты нашёл **{format_number(reward)}** {ECONOMY_EMOJIS['coin']}!",
+            color=0xFFD700
+        )
+        await ctx.send(embed=embed, ephemeral=True)
+    else:
+        await ctx.send(f"Предмет **{item}** пока нельзя использовать.", ephemeral=True)
+
 @bot.hybrid_command(name="admin_coins", description="⚙️ Изменить количество монет у пользователя (только для админов)")
 @app_commands.describe(
     member="Кому изменить баланс (можно указать себя)",
