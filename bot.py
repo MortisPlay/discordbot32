@@ -3071,10 +3071,7 @@ async def shop(ctx: commands.Context):
 @bot.hybrid_command(name="inventory", description="🎒 Ваш инвентарь")
 async def inventory(ctx: commands.Context):
     if not has_full_access(ctx.guild.id):
-        return await ctx.send(
-            f"{ECONOMY_EMOJIS['error']} Экономика доступна только на основном сервере.",
-            ephemeral=True
-        )
+        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Только на основном сервере.", ephemeral=True)
 
     user_id = str(ctx.author.id)
     if user_id not in economy_data:
@@ -3087,22 +3084,39 @@ async def inventory(ctx: commands.Context):
 
     embed = discord.Embed(
         title=f"🎒 Инвентарь {ctx.author.display_name}",
-        color=COLORS["economy"],
+        color=0x2ecc71,
         timestamp=datetime.now(timezone.utc)
     )
     embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
-    # Предметы
+    # Цвета по редкости
+    rarity_colors = {
+        "common": 0x95a5a6,
+        "rare": 0x3498db,
+        "epic": 0x9b59b6,
+        "legendary": 0xf1c40f
+    }
+    rarity_emojis = {
+        "common": "⬜",
+        "rare": "💎",
+        "epic": "🌟",
+        "legendary": "🔥"
+    }
+
     if inv:
         items_text = ""
-        for item_id, count in inv.items():
+        for item_id, count in sorted(inv.items()):
             item = INVENTORY_ITEMS.get(item_id, {})
             name = item.get("name", item_id)
             emoji = item.get("emoji", "📦")
-            items_text += f"{emoji} **{name}** ×{count}\n"
+            rarity = item.get("rarity", "common")
+            r_emoji = rarity_emojis.get(rarity, "📦")
+            color = rarity_colors.get(rarity, 0x808080)
+            items_text += f"**{r_emoji} {emoji} {name}** ×{count}\n"
         embed.add_field(name="📦 Предметы", value=items_text.strip() or "Пусто", inline=False)
+        embed.color = color  # берём цвет самого редкого предмета (последнего в цикле)
     else:
-        embed.add_field(name="📦 Предметы", value="Пусто", inline=False)
+        embed.add_field(name="📦 Предметы", value="Пусто — сходи в `/shop`!", inline=False)
 
     # Активные эффекты
     now_ts = int(datetime.now(timezone.utc).timestamp())
