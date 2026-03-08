@@ -1279,6 +1279,378 @@ class FAQView(View):
         super().__init__(timeout=60)
         self.author = author
         self.add_item(FAQCategorySelect())
+
+class UseItemModal(Modal, title="Используй предмет"):
+    """Модальное окно для подтверждения использования"""
+    def __init__(self, item_id: str, item_name: str, owner_id: int):
+        super().__init__()
+        self.item_id = item_id
+        self.item_name = item_name
+        self.owner_id = owner_id
+        
+        self.add_item(TextInput(
+            label="Подтвердите использование",
+            placeholder=f"Напишите 'да' для использования {item_name}",
+            style=discord.TextStyle.short,
+            required=True
+        ))
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != self.owner_id:
+            return await interaction.response.send_message(
+                "❌ Это не твой предмет!", ephemeral=True
+            )
+        
+        confirm_text = self.children[0].value.lower().strip()
+        if confirm_text != "да":
+            return await interaction.response.send_message(
+                f"❌ Использование {self.item_name} отменено. Нужно написать 'да'.",
+                ephemeral=True
+            )
+        
+        user_id = str(interaction.user.id)
+        if user_id not in economy_data:
+            return await interaction.response.send_message(
+                "❌ Пользователь не найден в экономике.", ephemeral=True
+            )
+        
+        inv = economy_data[user_id].get("inventory", {})
+        if self.item_id not in inv or inv[self.item_id] <= 0:
+            return await interaction.response.send_message(
+                f"❌ У вас больше нет **{self.item_name}**!", ephemeral=True
+            )
+        
+        result = await handle_item_use(
+            interaction.user,
+            self.item_id,
+            self.item_name,
+            interaction
+        )
+        
+        if result["success"]:
+            inv[self.item_id] -= 1
+            if inv[self.item_id] == 0:
+                del inv[self.item_id]
+            save_economy()
+            
+            await interaction.response.send_message(
+                embed=result["embed"],
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                result["error"],
+                ephemeral=True
+            )
+
+
+class InventoryViewImproved(View):
+    """Улучшенный вид инвентаря с кнопками для каждого предмета"""
+    def __init__(self, owner_id: int, inventory: dict):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.inventory = inventory.copy()
+        
+        row = 0
+        items_added = 0
+        usable_items = ["gift_box", "lucky_spin", "xp_boost_24h"]
+        
+        for item_id in usable_items:
+            if item_id in self.inventory and self.inventory[item_id] > 0:
+                item = INVENTORY_ITEMS.get(item_id, {})
+                name = item.get("name", item_id)
+                count = self.inventory[item_id]
+                
+                button = Button(
+                    label=f"Использовать {name} ×{count}",
+                    style=discord.ButtonStyle.green,
+                    emoji=item.get("emoji", "🎁"),
+                    row=row
+                )
+                
+                button.callback = self.create_use_callback(item_id, name)
+                self.add_item(button)
+                items_added += 1
+                
+                if items_added % 2 == 0:
+                    row += 1
+        
+        refresh_btn = Button(
+            label="🔄 Обновить",
+            style=discord.ButtonStyle.grey,
+            row=min(2, row + 1)
+        )
+        refresh_btn.callback = self.refresh_inventory
+        self.add_item(refresh_btn)
+    
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ Это не твой инвентарь!", ephemeral=True
+            )
+            return False
+        return True
+    
+    def create_use_callback(self, item_id: str, item_name: str):
+        """Создаёт callback для кнопки использования"""
+        async def callback(interaction: discord.Interaction):
+            modal = UseItemModal(item_id, item_name, self.owner_id)
+            await interaction.response.send_modal(modal)
+        return callback
+    
+    async def refresh_inventory(self, interaction: discord.Interaction):
+        """Обновить отображение инвентаря"""
+        user_id = str(interaction.user.id)
+        if user_id not in economy_data:
+            return await interaction.response.send_message(
+                "❌ Пользователь не найден.", ephemeral=True
+            )
+        
+        data = economy_data[user_id]
+        inv = data.get("inventory", {})
+        
+        embed = await create_inventory_embed(interaction.user, inv, data)
+        new_view = InventoryViewImproved(self.owner_id, inv)
+        
+        await interaction.response.edit_message(embed=embed, view=new_view)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ОБРАБОТЧИКИ ИСПОЛЬЗОВАНИЯ ПРЕДМЕТОВ
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def handle_item_use(member: discord.Member, item_id: str, item_name: str, interaction: discord.Interaction) -> dict:
+    """Главный обработчик использования любого предмета"""
+    user_id = str(member.id)
+    
+    try:
+        if item_id == "gift_box":
+            return await use_gift_box(member, user_id)
+        
+        elif item_id == "lucky_spin":
+            return await use_lucky_spin(member, user_id)
+        
+        elif item_id == "xp_boost_24h":
+            return await use_xp_boost(member, user_id)
+        
+        else:
+            return {
+                "success": False,
+                "error": f"❌ Неизвестный предмет: {item_id}"
+            }
+    
+    except Exception as e:
+        print(f"❌ Ошибка при использовании {item_id}: {e}")
+        return {
+            "success": False,
+            "error": f"❌ Ошибка при использовании: {str(e)}"
+        }
+
+
+async def use_gift_box(member: discord.Member, user_id: str) -> dict:
+    """Использование подарочной коробки"""
+    reward = open_gift_box()
+    
+    economy_data[user_id]["balance"] += reward
+    
+    if reward >= 2200:
+        rarity = "🔥 ЛЕГЕНДАРНАЯ!"
+        color = 0xF1C40F
+        emoji = "🌟"
+    elif reward >= 1800:
+        rarity = "🌟 Эпическая!"
+        color = 0x9B59B6
+        emoji = "✨"
+    elif reward >= 1200:
+        rarity = "💎 Редкая"
+        color = 0x3498DB
+        emoji = "💎"
+    else:
+        rarity = "🪙 Обычная"
+        color = 0xA8A8A8
+        emoji = "🪙"
+    
+    embed = discord.Embed(
+        title=f"{emoji} Коробка открыта!",
+        description=f"**+{format_number(reward)}** {ECONOMY_EMOJIS['coin']}",
+        color=color,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="Редкость", value=rarity, inline=True)
+    embed.add_field(
+        name="Новый баланс",
+        value=f"**{format_number(economy_data[user_id]['balance'])}** {ECONOMY_EMOJIS['coin']}",
+        inline=True
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="🎁 Подарочная коробка")
+    
+    if reward >= 1500:
+        await send_mod_log(
+            title="🎁 Крупная награда из коробки!",
+            description=f"**Пользователь:** {member.mention}\n**Награда:** {format_number(reward)} {ECONOMY_EMOJIS['coin']}\n**Редкость:** {rarity}",
+            color=color
+        )
+    
+    save_economy()
+    return {"success": True, "embed": embed}
+
+
+async def use_lucky_spin(member: discord.Member, user_id: str) -> dict:
+    """Использование счастливой крутки (пока заглушка)"""
+    embed = discord.Embed(
+        title="🎰 Счастливая крутка",
+        description="⚙️ Эта механика ещё в разработке!\n\nВернись позже или свяжись с администрацией.",
+        color=0xF1C40F,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    return {"success": True, "embed": embed}
+
+
+async def use_xp_boost(member: discord.Member, user_id: str) -> dict:
+    """Использование буста опыта на 24 часа"""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    end_ts = now_ts + (24 * 3600)
+    
+    effects = economy_data[user_id].get("active_effects", [])
+    active_xp_boost = any(e.get("effect_type") == "xp_multiplier" for e in effects)
+    
+    if active_xp_boost:
+        return {
+            "success": False,
+            "error": "❌ У вас уже активен буст опыта! Подожди, пока истечёт."
+        }
+    
+    effect = {
+        "effect_type": "xp_multiplier",
+        "name": "Буст опыта ×2",
+        "value": 2.0,
+        "start_time": now_ts,
+        "end_time": end_ts,
+        "duration_sec": 24 * 3600
+    }
+    economy_data[user_id].setdefault("active_effects", []).append(effect)
+    save_economy()
+    
+    embed = discord.Embed(
+        title="⚡ Буст опыта активирован!",
+        description="**×2 опыта на 24 часа** 🚀",
+        color=0x00FF9D,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.add_field(name="⏰ Действует", value="**24 часа**", inline=True)
+    embed.add_field(name="📊 Множитель", value="**×2.0**", inline=True)
+    embed.add_field(
+        name="✨ Завершение",
+        value=f"<t:{int(end_ts)}:R>",
+        inline=False
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text="⚡ Буст активирован")
+    
+    try:
+        await send_mod_log(
+            title="⚡ Буст активирован",
+            description=f"**Пользователь:** {member.mention}\n**Эффект:** Буст опыта ×2\n**Длительность:** 24 часа",
+            color=0x00FF9D
+        )
+    except:
+        pass
+    
+    return {"success": True, "embed": embed}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ПОМОЩНИК ДЛЯ СОЗДАНИЯ EMBED'а ИНВЕНТАРЯ
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def create_inventory_embed(member: discord.Member, inventory: dict, economy_data_user: dict) -> discord.Embed:
+    """Создаёт красивый embed для инвентаря"""
+    embed = discord.Embed(
+        title=f"🎒 Инвентарь {member.display_name}",
+        color=0x2ecc71,
+        timestamp=datetime.now(timezone.utc)
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    # ─ ПРЕДМЕТЫ ─
+    if inventory:
+        items_lines = []
+        rarest_rarity = "common"
+        rarity_order = ["common", "rare", "epic", "legendary"]
+        
+        for item_id, count in sorted(inventory.items()):
+            item = INVENTORY_ITEMS.get(item_id, {})
+            rarity = item.get("rarity", "common")
+            style = RARITY_STYLE.get(rarity, RARITY_STYLE["common"])
+            name = item.get("name", item_id)
+            emoji = item.get("emoji", "📦")
+            
+            items_lines.append(f"{style['emoji']} **{emoji} {name}** ×{count}")
+            
+            if rarity_order.index(rarity) > rarity_order.index(rarest_rarity):
+                rarest_rarity = rarity
+        
+        def get_rarity_index(line):
+            for r in rarity_order:
+                if RARITY_STYLE[r]["emoji"] in line:
+                    return rarity_order.index(r)
+            return 0
+        
+        items_lines.sort(key=get_rarity_index, reverse=True)
+        
+        embed.add_field(
+            name="📦 Предметы",
+            value="\n".join(items_lines),
+            inline=False
+        )
+        embed.color = RARITY_STYLE[rarest_rarity]["color"]
+    else:
+        embed.add_field(
+            name="📦 Предметы",
+            value="🚫 Инвентарь пуст!\nСходи в `/shop` 🛒",
+            inline=False
+        )
+    
+    # ─ АКТИВНЫЕ ЭФФЕКТЫ ─
+    now_ts = datetime.now(timezone.utc).timestamp()
+    effects = economy_data_user.get("active_effects", [])
+    active_lines = []
+    
+    for eff in effects[:10]:
+        ends_at = eff.get("end_time", 0)
+        if ends_at <= now_ts:
+            continue
+        
+        time_left_sec = ends_at - now_ts
+        hours_left = int(time_left_sec // 3600)
+        mins_left = int((time_left_sec % 3600) // 60)
+        
+        duration_sec = eff.get("duration_sec", 24 * 3600)
+        progress = (time_left_sec / duration_sec) * 100
+        progress = max(0, min(100, progress))
+        
+        bar = create_progress_bar(int(progress), 100, length=12)
+        name = eff.get("name", "Эффект")
+        value = eff.get("value", 1)
+        
+        line = f"**{name} ×{value}** — <t:{int(ends_at)}:R>\n`{bar}` **{int(progress)}%**"
+        active_lines.append(line)
+    
+    embed.add_field(
+        name="✨ Активные эффекты",
+        value="\n".join(active_lines) if active_lines else "✅ Нет активных эффектов",
+        inline=False
+    )
+    
+    # ─ СТАТИСТИКА ─
+    balance = economy_data_user.get("balance", 0)
+    embed.set_footer(
+        text=f"Баланс: {format_number(balance)} {ECONOMY_EMOJIS['coin']} • Используй кнопки ниже"
+    )
+    
+    return embed                
 # ───────────────────────────────────────────────
 # Магазин с кнопками, подтверждением, проверкой "уже куплено"
 # ───────────────────────────────────────────────
@@ -1417,41 +1789,7 @@ class ShopView(View):
                 ephemeral=True
             )
         modal = ShopConfirmModal(item_key, shop_item["name"], price, price)
-        await interaction.response.send_modal(modal)
-
-class InventoryView(View):
-    def __init__(self, owner_id: int, inventory: dict):
-        super().__init__(timeout=180)
-        self.owner_id = owner_id
-        self.inventory = inventory.copy()  # копия, чтобы не мутировать оригинал
-
-        # Добавляем кнопки только для используемых предметов
-        usable_items = ["gift_box", "lucky_spin", "xp_boost_24h"]  # расширяй по мере добавления
-        row = 0
-        for item_id in usable_items:
-            if item_id in self.inventory and self.inventory[item_id] > 0:
-                item = INVENTORY_ITEMS.get(item_id, {})
-                name = item.get("name", item_id)
-                button = Button(
-                    label=f"Использовать {name}",
-                    style=discord.ButtonStyle.green,
-                    emoji=item.get("emoji", "🎁"),
-                    custom_id=f"use_{item_id}"
-                )
-                button.callback = self.create_use_callback(item_id)
-                self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message("Это не твой инвентарь!", ephemeral=True)
-            return False
-        return True
-
-    def create_use_callback(self, item_id: str):
-        async def callback(interaction: discord.Interaction):
-            # Здесь будет логика использования (пока заглушка)
-            await interaction.response.send_message(f"Попытка использовать {item_id}... (логика в разработке)", ephemeral=True)
-        return callback        
+        await interaction.response.send_modal(modal)       
 # ───────────────────────────────────────────────
 # ИНИЦИАЛИЗАЦИЯ БОТА
 # ───────────────────────────────────────────────
@@ -3363,150 +3701,6 @@ async def shop(ctx: commands.Context):
         await send_error_embed(ctx, f"Ошибка в магазине: {str(e)}")
         print(f"[SHOP ERROR] {e}")
 
-@bot.hybrid_command(name="inventory", description="🎒 Ваш инвентарь")
-async def inventory(ctx: commands.Context):
-    if not has_full_access(ctx.guild.id):
-        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Только на основном сервере.", ephemeral=True)
-
-    user_id = str(ctx.author.id)
-    if user_id not in economy_data:
-        economy_data[user_id] = {"balance": 0, "inventory": {}, "active_effects": []}
-        save_economy()
-
-    data = economy_data[user_id]
-    inv = data.get("inventory", {})
-    effects = data.get("active_effects", [])
-
-    embed = discord.Embed(
-        title=f"🎒 Инвентарь {ctx.author.display_name}",
-        color=0x2ecc71,
-        timestamp=datetime.now(timezone.utc)
-    )
-    embed.set_thumbnail(url=ctx.author.display_avatar.url)
-
-    # ─── Предметы ────────────────────────────────────────────────────────
-    if inv:
-        items_lines = []
-        rarest_rarity = "common"
-        rarity_order = ["common", "rare", "epic", "legendary"]
-
-        for item_id, count in inv.items():
-            item = INVENTORY_ITEMS.get(item_id, {})
-            rarity = item.get("rarity", "common")
-            style = RARITY_STYLE.get(rarity, RARITY_STYLE["common"])
-            name = item.get("name", item_id)
-            emoji = item.get("emoji", "📦")
-
-            # Добавляем строку в список
-            items_lines.append(f"{style['emoji']} **{emoji} {name}** ×{count}")
-
-            # Обновляем самую редкую редкость
-            if rarity_order.index(rarity) > rarity_order.index(rarest_rarity):
-                rarest_rarity = rarity
-
-        # Сортируем предметы от самой редкой к самой обычной
-        def get_rarity_index(line):
-            for r in rarity_order:
-                if RARITY_STYLE[r]["emoji"] in line:
-                    return rarity_order.index(r)
-            return 0
-
-        items_lines.sort(key=get_rarity_index, reverse=True)
-
-        embed.add_field(
-            name="📦 Предметы",
-            value="\n".join(items_lines) or "Пусто",
-            inline=False
-        )
-
-        # Устанавливаем цвет по самой редкой вещи
-        embed.color = RARITY_STYLE[rarest_rarity]["color"]
-
-    else:
-        embed.add_field(
-            name="📦 Предметы",
-            value="Пусто — сходи в `/shop`!",
-            inline=False
-        )
-
-    # ─── Активные эффекты ────────────────────────────────────────────────
-    now_ts = datetime.now(timezone.utc).timestamp()
-    active_lines = []
-
-    for eff in effects[:10]:  # лимит 10, чтобы не заспамить
-        ends_at = eff.get("ends_at", 0)
-        if ends_at <= now_ts:
-            continue
-
-        time_left_sec = ends_at - now_ts
-        hours_left = int(time_left_sec // 3600)
-        mins_left = int((time_left_sec % 3600) // 60)
-
-        # Если duration_sec не задан — берём разумное значение по умолчанию
-        duration_sec = eff.get("duration_sec", 24 * 3600)  # 24 часа по умолчанию
-        progress = (time_left_sec / duration_sec) * 100
-        progress = max(0, min(100, progress))  # ограничиваем 0–100
-
-        bar = create_progress_bar(int(progress), 100, length=12)
-        name = eff.get("name", eff.get("effect_type", "Эффект"))
-        value = eff.get("value", 1)
-
-        line = f"**{name} ×{value}** — осталось {hours_left}ч {mins_left}мин\n`{bar}` **{int(progress)}%**"
-        active_lines.append(line)
-
-    embed.add_field(
-        name="✨ Активные эффекты",
-        value="\n".join(active_lines) or "Нет активных эффектов",
-        inline=False
-    )
-
-    embed.set_footer(
-        text=f"Баланс: {format_number(data['balance'])} {ECONOMY_EMOJIS['coin']} • /use <название> для использования"
-    )
-
-    view = InventoryView(ctx.author.id, inv)
-    await ctx.send(embed=embed, view=view, ephemeral=True)
-
-@bot.hybrid_command(name="use", description="Использовать предмет из инвентаря")
-@app_commands.describe(item="Название предмета")
-async def use_item(ctx: commands.Context, item: str):
-    if not has_full_access(ctx.guild.id):
-        return await ctx.send(f"{ECONOMY_EMOJIS['error']} Только на основном сервере.", ephemeral=True)
-
-    user_id = str(ctx.author.id)
-    if user_id not in economy_data or "inventory" not in economy_data[user_id]:
-        return await ctx.send("У вас пустой инвентарь.", ephemeral=True)
-
-    inv = economy_data[user_id]["inventory"]
-    item_id = item.lower()
-
-    if item_id not in inv or inv[item_id] <= 0:
-        return await ctx.send(f"У вас нет предмета **{item}**.", ephemeral=True)
-
-    if item_id == "gift_box":
-         reward = open_gift_box()           # ← новая функция
-         economy_data[user_id]["balance"] += reward
-         inv[item_id] -= 1
-    if inv[item_id] == 0:
-        del inv[item_id]
-    save_economy()
-
-    rarity = "обычная"
-    color = 0xA8A8A8
-    if reward >= 2200:
-        rarity = "легендарная!"
-        color = 0xF1C40F
-    elif reward >= 1800:
-        rarity = "эпическая!"
-        color = 0x9B59B6
-
-    embed = discord.Embed(
-        title="🎁 Коробка открыта!",
-        description=f"Ты нашёл **{format_number(reward)}** {ECONOMY_EMOJIS['coin']}!\nРедкость: **{rarity}**",
-        color=color
-    )
-    await ctx.send(embed=embed, ephemeral=True)
-
 @bot.hybrid_command(name="admin_coins", description="⚙️ Изменить количество монет у пользователя (только для админов)")
 @app_commands.describe(
     member="Кому изменить баланс (можно указать себя)",
@@ -3623,7 +3817,96 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)            
+signal.signal(signal.SIGTERM, signal_handler)
+
+@bot.hybrid_command(name="inventory", description="🎒 Ваш инвентарь с использованием предметов")
+async def inventory(ctx: commands.Context):
+    """Показывает инвентарь с кнопками для использования"""
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Экономика только на сервере разработчика.",
+            ephemeral=True
+        )
+    
+    await ctx.defer(ephemeral=True)
+    
+    user_id = str(ctx.author.id)
+    
+    if user_id not in economy_data:
+        economy_data[user_id] = {
+            "balance": 0,
+            "inventory": {},
+            "active_effects": [],
+            "last_daily": 0,
+            "last_message": 0,
+            "investments": []
+        }
+        save_economy()
+    
+    data = economy_data[user_id]
+    inv = data.get("inventory", {})
+    
+    try:
+        embed = await create_inventory_embed(ctx.author, inv, data)
+        view = InventoryViewImproved(ctx.author.id, inv)
+        
+        await ctx.send(embed=embed, view=view, ephemeral=True)
+    
+    except Exception as e:
+        await send_error_embed(ctx, f"Ошибка при загрузке инвентаря: {str(e)}")
+        print(f"[INVENTORY ERROR] {e}")
+
+
+@bot.hybrid_command(name="use", description="Использовать предмет из инвентаря")
+@app_commands.describe(item="Название или ID предмета (gift_box, lucky_spin, xp_boost_24h)")
+async def use_item_command(ctx: commands.Context, item: str):
+    """Быстрое использование предмета"""
+    if not has_full_access(ctx.guild.id):
+        return await ctx.send(
+            f"{ECONOMY_EMOJIS['error']} Только на сервере разработчика.",
+            ephemeral=True
+        )
+    
+    await ctx.defer(ephemeral=True)
+    
+    user_id = str(ctx.author.id)
+    
+    if user_id not in economy_data or "inventory" not in economy_data[user_id]:
+        return await ctx.send("❌ Ваш инвентарь пуст.", ephemeral=True)
+    
+    inv = economy_data[user_id]["inventory"]
+    item_id = item.lower().strip()
+    
+    found_item = None
+    for iid, item_obj in INVENTORY_ITEMS.items():
+        if iid == item_id or item_obj.get("name", "").lower() == item_id:
+            found_item = iid
+            break
+    
+    if not found_item:
+        return await ctx.send(
+            f"❌ Предмет **{item}** не найден.\nДоступные: gift_box, lucky_spin, xp_boost_24h",
+            ephemeral=True
+        )
+    
+    if found_item not in inv or inv[found_item] <= 0:
+        return await ctx.send(
+            f"❌ У вас нет предмета **{item}**.",
+            ephemeral=True
+        )
+    
+    item_name = INVENTORY_ITEMS.get(found_item, {}).get("name", found_item)
+    result = await handle_item_use(ctx.author, found_item, item_name, ctx.interaction)
+    
+    if result["success"]:
+        inv[found_item] -= 1
+        if inv[found_item] == 0:
+            del inv[found_item]
+        save_economy()
+        
+        await ctx.send(embed=result["embed"], ephemeral=True)
+    else:
+        await ctx.send(result["error"], ephemeral=True)
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
