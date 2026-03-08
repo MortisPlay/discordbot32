@@ -3090,6 +3090,33 @@ async def admin_coins(ctx: commands.Context, member: discord.Member, amount: int
         log_ch = bot.get_channel(MOD_LOG_CHANNEL_ID)
         if log_ch:
             await log_ch.send(embed=log_embed)
+
+import signal
+import atexit
+
+# ───────────────────────────────────────────────
+# Сохранение при выключении / Ctrl+C / SIGTERM
+# ───────────────────────────────────────────────
+
+def graceful_shutdown():
+    print("[SHUTDOWN] Принудительное сохранение экономики...")
+    save_economy()
+    save_warnings()
+    save_cases()
+    save_faq()
+    print("[SHUTDOWN] Данные сохранены. Выход.")
+
+# Регистрируем обработчики
+atexit.register(graceful_shutdown)
+
+# Для Ctrl+C и SIGTERM (в linux/docker чаще всего SIGTERM)
+def signal_handler(sig, frame):
+    print(f"[SHUTDOWN] Получен сигнал {sig}")
+    graceful_shutdown()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)            
 # ───────────────────────────────────────────────
 # ЗАПУСК
 # ───────────────────────────────────────────────
