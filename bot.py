@@ -286,58 +286,103 @@ def get_db():
         conn.close()
 
 def load_economy():
+    """Загружает данные из SQLite БД с полной поддержкой восстановления"""
     global economy_data
     economy_data = {"server_vault": 0}
     
-    with get_db() as conn:
-        c = conn.cursor()
-        c.execute("SELECT value FROM server_vault WHERE key = 'vault'")
-        row = c.fetchone()
-        if row:
-            economy_data["server_vault"] = row[0]
-        
-        c.execute("SELECT user_id, balance, last_daily, last_message, multiplier_end, inventory, active_effects, investments FROM economy")
-        for row in c.fetchall():
-            uid = row[0]
-            economy_data[uid] = {
-                "balance": row[1] or 0,
-                "last_daily": row[2] or 0,
-                "last_message": row[3] or 0,
-                "multiplier_end": row[4] or 0,
-                "inventory": json.loads(row[5] or '{}'),
-                "active_effects": json.loads(row[6] or '[]'),
-                "investments": json.loads(row[7] or '[]')
-            }
-    
-    print(f"[ECONOMY] Загружено из SQLite: {len(economy_data)-1} игроков")
-
-def save_economy():
     try:
         with get_db() as conn:
             c = conn.cursor()
-            c.execute("UPDATE server_vault SET value = ? WHERE key = 'vault'", 
-                     (economy_data.get("server_vault", 0),))
             
-            for uid, data in economy_data.items():
-                if uid == "server_vault": continue
-                c.execute('''
-                    INSERT OR REPLACE INTO economy 
-                    (user_id, balance, last_daily, last_message, multiplier_end, inventory, active_effects, investments)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    uid,
-                    data.get("balance", 0),
-                    data.get("last_daily", 0),
-                    data.get("last_message", 0),
-                    data.get("multiplier_end", 0),
-                    json.dumps(data.get("inventory", {})),
-                    json.dumps(data.get("active_effects", [])),
-                    json.dumps(data.get("investments", []))
-                ))
-            conn.commit()
-        print("[SAVE] SQLite — экономика сохранена")
+            # Загружаем казну
+            c.execute("SELECT value FROM server_vault WHERE key = 'vault'")
+            row = c.fetchone()
+            if row:
+                economy_data["server_vault"] = row[0]
+            else:
+                c.execute("INSERT INTO server_vault (key, value) VALUES ('vault', 0)")
+                conn.commit()
+            
+            # Загружаем всех игроков
+            c.execute("""
+                SELECT user_id, balance, last_daily, last_message, multiplier_end, 
+                       inventory, active_effects, investments 
+                FROM economy
+            """)
+            
+            loaded_count = 0
+            for row in c.fetchall():
+                uid = row[0]
+                economy_data[uid] = {
+                    "balance": int(row[1]) if row[1] else 0,
+                    "last_daily": float(row[2]) if row[2] else 0,
+                    "last_message": float(row[3]) if row[3] else 0,
+                    "multiplier_end": float(row[4]) if row[4] else 0,
+                    "inventory": json.loads(row[5] or '{}'),
+                    "active_effects": json.loads(row[6] or '[]'),
+                    "investments": json.loads(row[7] or '[]')
+                }
+                loaded_count += 1
+        
+        vault = economy_data.get("server_vault", 0)
+        print(f"✅ [ECONOMY LOAD] Загружено {loaded_count} игроков из SQLite")
+        print(f"   💰 Казна сервера: {format_number(vault)} монет")
+        
     except Exception as e:
-        print(f"[SAVE CRITICAL] ОШИБКА: {e}")
+        print(f"❌ [ECONOMY LOAD ERROR] {e}")
+        traceback.print_exc()
+        economy_data = {"server_vault": 0}
+
+def save_economy():
+    """Сохраняет ВСЕ данные в SQLite с логированием"""
+    try:
+        if not economy_data:
+            print("[SAVE] Нечего сохранять")
+            return
+            
+        with get_db() as conn:
+            c = conn.cursor()
+            
+            # Сохраняем казну
+            vault_value = economy_data.get("server_vault", 0)
+            c.execute("UPDATE server_vault SET value = ? WHERE key = 'vault'", (vault_value,))
+            
+            if c.rowcount == 0:
+                c.execute("INSERT INTO server_vault (key, value) VALUES ('vault', ?)", (vault_value,))
+            
+            # Сохраняем игроков
+            saved_players = 0
+            for uid, data in economy_data.items():
+                if uid == "server_vault":
+                    continue
+                
+                try:
+                    c.execute('''
+                        INSERT OR REPLACE INTO economy 
+                        (user_id, balance, last_daily, last_message, multiplier_end, 
+                         inventory, active_effects, investments)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        uid,
+                        int(data.get("balance", 0)),
+                        float(data.get("last_daily", 0)),
+                        float(data.get("last_message", 0)),
+                        float(data.get("multiplier_end", 0)),
+                        json.dumps(data.get("inventory", {}), ensure_ascii=False),
+                        json.dumps(data.get("active_effects", []), ensure_ascii=False),
+                        json.dumps(data.get("investments", []), ensure_ascii=False)
+                    ))
+                    saved_players += 1
+                except Exception as e:
+                    print(f"⚠️  Ошибка при сохранении {uid}: {e}")
+                    continue
+            
+            conn.commit()
+            
+        print(f"✅ [SAVE] Сохранено {saved_players} игроков | 💰 Казна: {format_number(vault_value)}")
+        
+    except Exception as e:
+        print(f"❌ [SAVE CRITICAL] {e}")
         traceback.print_exc()
 # ───────────────────────────────────────────────
 # ЗАГРУЗКА / СОХРАНЕНИЕ ОСТАЛЬНЫХ ФАЙЛОВ (faq, warnings, cases)
@@ -1430,10 +1475,13 @@ bot = commands.Bot(
 # ───────────────────────────────────────────────
 # ФОНОВЫЕ ЗАДАЧИ
 # ───────────────────────────────────────────────
-@tasks.loop(seconds=30)
+@tasks.loop(seconds=15)  # ← БЫЛО 30, ТЕПЕРЬ 15 (чаще!)
 async def autosave_economy_task():
-    save_economy()
-    print("[AUTO] Экономика сохранена")
+    """Автосохранение экономики каждые 15 секунд"""
+    try:
+        save_economy()
+    except Exception as e:
+        print(f"❌ [AUTOSAVE ERROR] {e}")
 @tasks.loop(hours=1)
 async def clean_old_warnings_task():
     global warnings_data
@@ -1525,6 +1573,7 @@ async def voice_income_task():
             active_members = [
                 m for m in vc.members
                 if not m.bot
+                and m.voice
                 and not (m.voice.mute or m.voice.self_mute or m.voice.self_deaf or m.voice.deaf)
             ]
             if len(active_members) < 2:
@@ -1578,15 +1627,35 @@ async def on_ready():
     print(f"│ ID {bot.user.id} │")
     print(f"│ Время запуска {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} │")
     print(f"└──────────────────────────────────────────────┘")
+    
     await bot.change_presence(
         status=discord.Status.dnd,
         activity=discord.Activity(type=discord.ActivityType.watching, name="mortisplay.ru")
     )
+    
     try:
         synced = await bot.tree.sync()
         print(f"Команды синхронизированы: {len(synced)} шт")
     except Exception as e:
         print(f"Ошибка синхронизации: {e}")
+    
+    # ✅ ПРОВЕРКА ЦЕЛОСТНОСТИ БД
+    try:
+        with get_db() as conn:
+            c = conn.cursor()
+            c.execute("PRAGMA integrity_check")
+            check = c.fetchone()
+            if check[0] == "ok":
+                print("✅ [DB CHECK] База данных целостна")
+            else:
+                print(f"⚠️  [DB CHECK] Проблема: {check[0]}")
+    except Exception as e:
+        print(f"❌ [DB CHECK] Ошибка проверки: {e}")
+    
+    # ✅ ЗАГРУЗКА ЭКОНОМИКИ
+    load_economy()
+    save_economy()  # Проверяем, что сохранение работает
+    
     for guild in bot.guilds:
         await guild.chunk()
         if guild.id == FULL_ACCESS_GUILD_ID:
@@ -1597,16 +1666,55 @@ async def on_ready():
                     print(f"⚠️ НЕТ ПРАВА VIEW_AUDIT_LOG на сервере {guild.name}!")
                 else:
                     print(f"✅ Право VIEW_AUDIT_LOG есть на сервере {guild.name}")
+    
     bot.add_view(TicketPanelView())
     bot.add_view(TicketControls())
+
+    async def reset_voice_earned():
+     while True:
+        now = datetime.now(timezone.utc)
+        # Следующий день в 00:00
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        wait_seconds = (tomorrow - now).total_seconds()
+        
+        await asyncio.sleep(wait_seconds)
+        daily_voice_earned.clear()
+        print("✅ [VOICE] Дневной лимит сброшен")
+    
+    # ✅ ЗАПУСК ФОНОВЫХ ЗАДАЧ (измененный интервал для autosave)
     autosave_economy_task.start()
     clean_old_warnings_task.start()
     check_temp_roles_task.start()
     check_investments_task.start()
     check_inactive_tickets_task.start()
+    bot.loop.create_task(reset_voice_earned())
     voice_income_task.start()
+    
+    # ✅ ПРОВЕРКА ЦЕЛОСТНОСТИ ЭКОНОМИКИ КАЖДЫЙ ЧАС
+    async def verify_economy():
+        while True:
+            await asyncio.sleep(3600)  # Каждый час
+            try:
+                if not economy_data or economy_data == {"server_vault": 0}:
+                    print("⚠️  [VERIFY] Экономика пуста, перезагружаю...")
+                    load_economy()
+                
+                players = len([k for k in economy_data.keys() if k != "server_vault"])
+                vault = economy_data.get("server_vault", 0)
+                
+                if players > 0:
+                    print(f"✅ [VERIFY] Экономика в порядке: {players} игроков, казна {format_number(vault)}")
+                
+                # Сохраняем для подстраховки
+                save_economy()
+                
+            except Exception as e:
+                print(f"❌ [VERIFY ERROR] {e}")
+    
+    bot.loop.create_task(verify_economy())
+    
     bot.launch_time = datetime.now(timezone.utc)
-    print("Бот полностью готов к работе")
+    print("✅ Бот полностью готов к работе")
 # ───────────────────────────────────────────────
 # ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ДЛЯ ГОЛОСА
 # ───────────────────────────────────────────────
