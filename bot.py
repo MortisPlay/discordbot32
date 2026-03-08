@@ -3343,6 +3343,20 @@ async def admin_coins(ctx: commands.Context, member: discord.Member, amount: int
         if log_ch:
             await log_ch.send(embed=log_embed)
 
+@bot.hybrid_command(name="migration_status", description="Статус миграции экономики")
+async def migration_status(ctx):
+    if ctx.author.id != OWNER_ID:
+        return await ctx.send("Только владелец может смотреть.", ephemeral=True)
+    
+    status = "Миграция уже выполнена" if os.path.exists(MIGRATION_DONE_FILE) else "Миграция ещё не выполнялась"
+    count = len(economy_data) - 1 if "server_vault" in economy_data else 0
+    
+    embed = discord.Embed(title="Статус экономики", color=0x00ff9d)
+    embed.add_field(name="Миграция", value=status, inline=False)
+    embed.add_field(name="Игроков в базе", value=f"{count}", inline=False)
+    embed.add_field(name="Размер базы", value=f"{os.path.getsize(DB_FILE):,} байт", inline=False)
+    await ctx.send(embed=embed, ephemeral=True)            
+
 import signal
 import atexit
 
